@@ -2,10 +2,8 @@ package com.scaleunlimited.flinkkmeans;
 
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
 
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.java.tuple.Tuple4;
@@ -39,8 +37,8 @@ public class KMeansClustering {
     public static void build(StreamExecutionEnvironment env, 
             DataStream<Centroid> centroidsSource, DataStream<Feature> featuresSource,
             SinkFunction<Feature> sink) {
-        IterativeStream<Centroid> centroidsIter = centroidsSource.iterate(15000L);
-        IterativeStream<Feature> featuresIter = featuresSource.iterate(15000L);
+        IterativeStream<Centroid> centroidsIter = centroidsSource.iterate(5000L);
+        IterativeStream<Feature> featuresIter = featuresSource.iterate(5000L);
         
         SplitStream<Tuple4<Feature,Centroid,Centroid,Feature>> comboStream = centroidsIter.broadcast()
             .connect(featuresIter.shuffle())
@@ -113,6 +111,8 @@ public class KMeansClustering {
                 return CENTROID_UPDATE;
             } else if (value.f2 != null) {
                 return CENTROID_OUTPUT;
+            } else if (value.f3 != null) {
+                return FEATURE_OUTPUT;
             } else {
                 throw new RuntimeException("Invalid case of all fields null");
             }
@@ -122,10 +122,7 @@ public class KMeansClustering {
     @SuppressWarnings("serial")
     private static class ClusterFunction extends RichCoFlatMapFunction<Centroid, Feature, Tuple4<Feature, Centroid, Centroid, Feature>> {
 
-        private static int MAX_QEUEUED_FEATURES = 1000;
-        
         private transient Map<Integer, Centroid> centroids;
-        private transient Queue<Feature> featureQueue;
         private transient long centroidTimestamp;
         
         @Override
@@ -133,7 +130,6 @@ public class KMeansClustering {
             super.open(parameters);
 
             centroids = new HashMap<>();
-            featureQueue = new LinkedList<>();
             centroidTimestamp = 0;
         }
 
@@ -142,14 +138,6 @@ public class KMeansClustering {
             LOGGER.debug("Centroid {} @ {} >> Processing", centroid, centroid.getTime());
             
             centroidTimestamp = Math.max(centroidTimestamp, centroid.getTime());
-            
-            // Process queued features that are earlier than centroidTimestamp
-            while (!featureQueue.isEmpty()) {
-                Feature feature = featureQueue.peek();
-                if (feature.getTime() <= centroidTimestamp) {
-                    processFeature(featureQueue.remove(), out);
-                }
-            }
             
             int id = centroid.getId();
             switch (centroid.getType()) {
@@ -163,17 +151,23 @@ public class KMeansClustering {
                 
                 case ADD:
                     if (!centroids.containsKey(id)) {
-                        throw new RuntimeException(String.format("Got centroid add %s but it doesn't exist!", centroid));
+                        // We got an add for a cluster that we haven't received yet (could come from another operator),
+                        // so send it around again.
+                        out.collect(new Tuple4<>(null, centroid, null, null));
+                        return;
                     }
-                
+                        
                     centroids.get(id).addFeature(centroid.getFeature());
                     break;
                 
                 case REMOVE:
                     if (!centroids.containsKey(id)) {
-                        throw new RuntimeException(String.format("Got centroid remove %s but it doesn't exist!", centroid));
+                        // We got a remove for a cluster that we haven't received yet (could come from another operator),
+                        // so send it around again.
+                        out.collect(new Tuple4<>(null, centroid, null, null));
+                        return;
                     }
-                
+                    
                     centroids.get(id).removeFeature(centroid.getFeature());
                     break;
                 
@@ -188,14 +182,8 @@ public class KMeansClustering {
         @Override
         public void flatMap2(Feature feature, Collector<Tuple4<Feature,Centroid,Centroid,Feature>> out) throws Exception {
             if (feature.getTime() > centroidTimestamp) {
-                while (featureQueue.size() >= MAX_QEUEUED_FEATURES) {
-                    processFeature(featureQueue.remove(), out);
-                }
-                
-                LOGGER.debug("Feature {} @ {} >> queueing", feature, feature.getTime());
-                featureQueue.add(feature);
-                                
-                return;
+                LOGGER.debug("Feature {} @ {} >> too soon, recycling", feature, feature.getTime());
+                out.collect(new Tuple4<>(feature, null, null, null));
             } else {
                 processFeature(feature, out);
             }
