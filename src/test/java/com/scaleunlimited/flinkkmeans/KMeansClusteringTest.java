@@ -80,10 +80,21 @@ public class KMeansClusteringTest {
         
         Queue<Feature> results = InMemorySinkFunction.getValues();
         assertEquals(points.length, results.size());
+        
+        Map<Integer, Centroid> clusters = ClusterizePoints.createCentroids(points);
+        
         while (!results.isEmpty()) {
             Feature f = results.remove();
-            System.out.format("Got %d, expected %d for %s\n", f.getCentroidId(), f.getTargetCentroidId(), f);
-            // assertEquals(f.getTargetCentroidId(), f.getCentroidId());
+            if (f.getCentroidId() != f.getTargetCentroidId()) {
+                double actualDistance = f.distance(clusters.get(f.getCentroidId()).getFeature());
+                double targetDistance = f.distance(clusters.get(f.getTargetCentroidId()).getFeature());
+                if (actualDistance > targetDistance) {
+                    fail(String.format("Got %d (%f), expected %d (%f) for %s\n", 
+                            f.getCentroidId(), actualDistance, 
+                            f.getTargetCentroidId(), targetDistance,
+                            f));
+                }
+            }
         }
     }
 
@@ -163,21 +174,25 @@ public class KMeansClusteringTest {
             this.clusters = clusters;
         }
 
-        @Override
-        public void open(Configuration parameters) throws Exception {
-            super.open(parameters);
+        public static Map<Integer, Centroid> createCentroids(String[] points) {
+            Map<Integer, Centroid> result = new HashMap<>();
             
-            centroids = new HashMap<>();
-            
-            for (String p : clusters) {
+            for (String p : points) {
                 String[] fields = p.split("\\|");
                 Feature f = new Feature(Double.parseDouble(fields[1]),
                         Double.parseDouble(fields[2]));
                 Centroid c = new Centroid(f, Integer.parseInt(fields[0]), CentroidType.VALUE);
-                centroids.put(c.getId(), c);
-                LOGGER.debug(String.format("Adding cluster %d: %s", c.getId(), f));
+                result.put(c.getId(), c);
             }
-
+            
+            return result;
+        }
+        
+        @Override
+        public void open(Configuration parameters) throws Exception {
+            super.open(parameters);
+            
+            centroids = createCentroids(clusters);
         }
         
         @Override
