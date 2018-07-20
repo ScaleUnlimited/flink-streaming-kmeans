@@ -1,25 +1,29 @@
 package com.scaleunlimited.flinkkmeans;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 
+import java.io.File;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Random;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.commons.io.FileUtils;
 import org.apache.flink.api.common.functions.RichMapFunction;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
+import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.scaleunlimited.flinkkmeans.KMeansClustering;
 
 public class KMeansClusteringTest {
     private static final Logger LOGGER = LoggerFactory.getLogger(KMeansClusteringTest.class);
@@ -30,61 +34,48 @@ public class KMeansClusteringTest {
                 StreamExecutionEnvironment.createLocalEnvironment(2);
 
         String[] centers = KMeansData.INITIAL_CENTERS_2D.split("\n");
-        DataStream<Centroid> centroidsSource = env.fromElements(centers)
-                .map(new MapFunction<String, Centroid>() {
-                    private static final long serialVersionUID = 1L;
-
-                    public Centroid map(String c) {
-                        String[] fields = c.split("\\|");
-                        try {
-                            Feature f = new Feature(Double.parseDouble(fields[1]),
-                                    Double.parseDouble(fields[2]));
-                            return new Centroid(f, Integer.parseInt(fields[0]), CentroidType.VALUE);
-                        } catch (Exception e) {
-                            LOGGER.error("Failure parsing centroid data: " + c, e);
-                            throw new RuntimeException(e);
-                        }
-                    }
-                })
-                .name("Centroid source");
-
+        List<Centroid> centroids = new ArrayList<>();
+        for (String c : centers) {
+            String[] fields = c.split("\\|");
+            Feature f = new Feature(Double.parseDouble(fields[1]),
+                    Double.parseDouble(fields[2]));
+            centroids.add(new Centroid(f, Integer.parseInt(fields[0]), CentroidType.VALUE));
+        }
+        
+        SourceFunction<Centroid> centroidsSource = new ParallelListSource<Centroid>(centroids);
+        
         String[] points = KMeansData.DATAPOINTS_2D.split("\n");
-        DataStream<Feature> featuresSource = env.fromElements(points)
-                .map(new MapFunction<String, Feature>() {
-                    private static final long serialVersionUID = 1L;
-
-                    public Feature map(String p) {
-                        String[] fields = p.split("\\|");
-                        try {
-                            return new Feature(
-                                    Integer.parseInt(fields[0]),
-                                    Double.parseDouble(fields[1]),
-                                    Double.parseDouble(fields[2]));
-                        } catch (Exception e) {
-                            LOGGER.error("Failure parsing feature data: " + p, e);
-                            throw new RuntimeException(e);
-                        }
-                    }
-                })
-                .name("Feature source")
-                .map(new ClusterizePoints(centers))
-                .name("Clusterize points");
+        List<Feature> features = new ArrayList<>();
+        for (String p : points) {
+            String[] fields = p.split("\\|");
+            
+            Feature f = new Feature(
+                        Integer.parseInt(fields[0]),
+                        Double.parseDouble(fields[1]),
+                        Double.parseDouble(fields[2]));
+            features.add(clusterize(centroids, f));
+        }
+        
+        SourceFunction<Feature> featuresSource = new ParallelListSource<Feature>(features);
 
         InMemorySinkFunction sink = new InMemorySinkFunction();
         KMeansClustering.build(env, centroidsSource, featuresSource, sink);
         
-        // Uncomment to output directed graph of workflow.
-        // System.out.println(FlinkUtils.planToDot(env.getExecutionPlan()));
+        FileUtils.write(new File("./target/kmeans-graph.dot"), FlinkUtils.planToDot(env.getExecutionPlan()));
         
         env.execute();
         
-        Queue<Feature> results = InMemorySinkFunction.getValues();
+        Queue<Tuple2<Centroid, Feature>> results = InMemorySinkFunction.getValues();
         assertEquals(points.length, results.size());
         
         Map<Integer, Centroid> clusters = ClusterizePoints.createCentroids(points);
         
         while (!results.isEmpty()) {
-            Feature f = results.remove();
+            Tuple2<Centroid, Feature> result = results.remove();
+            Centroid c = result.f0;
+            Feature f = result.f1;
+            LOGGER.info("Feature {} assigned to centroid {} at {},{}", f, c.getId(), f.getX(), f.getY());
+            
             if (f.getCentroidId() != f.getTargetCentroidId()) {
                 double actualDistance = f.distance(clusters.get(f.getCentroidId()).getFeature());
                 double targetDistance = f.distance(clusters.get(f.getTargetCentroidId()).getFeature());
@@ -96,6 +87,27 @@ public class KMeansClusteringTest {
                 }
             }
         }
+    }
+
+    private Feature clusterize(List<Centroid> centroids, Feature value) throws Exception {
+        double minDistance = Double.MAX_VALUE;
+        Centroid bestCentroid = null;
+        for (Centroid centroid : centroids) {
+            double distance = centroid.distance(value);
+            if (distance < minDistance) {
+                minDistance = distance;
+                bestCentroid = centroid;
+            }
+        }
+
+        // Move the point part of the way to the best centroid cluster
+        double newX = value.getX() - (value.getX() - bestCentroid.getFeature().getX()) * 0.3;
+        double newY = value.getY() - (value.getY() - bestCentroid.getFeature().getY()) * 0.3;
+        
+//        LOGGER.debug(String.format("Moving towards cluster %d (%f,%f): %f,%f => %f,%f", 
+//                bestCentroid.getId(), bestCentroid.getFeature().getX(), bestCentroid.getFeature().getY(),
+//                value.getX(), value.getY(), newX, newY));
+        return new Feature(value.getId(), newX, newY, -1, bestCentroid.getId());
     }
 
     @Ignore
@@ -113,7 +125,7 @@ public class KMeansClusteringTest {
                 makeFeatures(centroids, numPoints));
 
         InMemorySinkFunction sink = new InMemorySinkFunction();
-        KMeansClustering.build(env, centroidsSource, featuresSource, sink);
+        // KMeansClustering.build(env, centroidsSource, featuresSource, sink);
 
         env.execute();
     }
@@ -143,17 +155,18 @@ public class KMeansClusteringTest {
     }
 
     @SuppressWarnings("serial")
-    private static class InMemorySinkFunction extends RichSinkFunction<Feature> {
+    private static class InMemorySinkFunction extends RichSinkFunction<Tuple2<Centroid, Feature>> {
         
         // Static, so all parallel functions will write to the same queue
-        static private Queue<Feature> _values = new ConcurrentLinkedQueue<>();
+        static private Queue<Tuple2<Centroid, Feature>> _values = new ConcurrentLinkedQueue<>();
         
-        public static Queue<Feature> getValues() {
+        public static Queue<Tuple2<Centroid, Feature>> getValues() {
             return _values;
         }
         
         @Override
-        public void invoke(Feature value) throws Exception {
+        public void invoke(Tuple2<Centroid, Feature> value) throws Exception {
+            LOGGER.debug("Adding feature {} for centroid {}", value.f1, value.f0);
             _values.add(value);
         }
     }

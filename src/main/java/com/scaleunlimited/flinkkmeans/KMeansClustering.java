@@ -4,9 +4,13 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import org.apache.flink.api.common.functions.MapFunction;
-import org.apache.flink.api.java.tuple.Tuple4;
+import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -15,104 +19,114 @@ import org.apache.flink.streaming.api.datastream.SplitStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.RichCoFlatMapFunction;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
+import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.scaleunlimited.flinksources.UnionedSource;
+
 /**
  * Cluster points via K-Means clustering. The algorithm is:
  *   - Start with N random clusters (centroids)
- *   - Feed points (unassigned to cluster) to the ClusterFunction
- *      - Assign each point to the nearest cluster
- *      - If the nearest cluster is different, iterate on the point
- *      - Recalculate cluster centroids
- *      - If a cluster centroid changes, iterate on the cluster (broadcast)
+ *   - Randomly shuffle features (unassigned to centroids) to the ClusterFunction
+ *      - Assign each feature to the nearest centroid
+ *      - If the nearest centroid is different for that feature,
+ *        remove the feature from the old centroid (output special centroid),
+ *        add the feature to the new centroid (output special centroid),
+ *        and reset the feature's "stable centroid" counter.
+ *   - Broadcast centroids to every ClusterFunction
+ *      - If it's a "regular" centroid, just record it.
+ *      - If it's special "feature added" or "feature removed" centroid, update
+ *        the centroid.
  *
- * We'll iterate until no points are changing clusters.
+ * Features are iterated on until their stable centroid counter reaches a target,
+ * and which time they get emitted, along with the centroid they belong to.
  *
  */
 public class KMeansClustering {
     private static final Logger LOGGER = LoggerFactory.getLogger(KMeansClustering.class);
 
     public static void build(StreamExecutionEnvironment env, 
-            DataStream<Centroid> centroidsSource, DataStream<Feature> featuresSource,
-            SinkFunction<Feature> sink) {
-        IterativeStream<Centroid> centroidsIter = centroidsSource.iterate(5000L);
-        IterativeStream<Feature> featuresIter = featuresSource.iterate(5000L);
+            SourceFunction<Centroid> centroidsSource, SourceFunction<Feature> featuresSource,
+            SinkFunction<Tuple2<Centroid, Feature>> sink) {
         
-        SplitStream<Tuple4<Feature,Centroid,Centroid,Feature>> comboStream = centroidsIter.broadcast()
-            .connect(featuresIter.shuffle())
+        TypeInformation<Tuple2<Centroid, Feature>> type = TypeInformation.of(new TypeHint<Tuple2<Centroid, Feature>>(){});
+        UnionedSource<Centroid, Feature> source = new UnionedSource<>(type, centroidsSource, featuresSource);
+
+        IterativeStream<Tuple2<Centroid, Feature>> iter = env.addSource(source).iterate(5000L);
+        
+        // Now comes some funky stuff. We want to broadcast centroids, but shuffle features. So we
+        // have to split the stream, apply the appropriate distribution, and the re-combine.
+        DataStream<Centroid> centroids = iter.split(new KmeansSelector())
+                .select(KmeansSelector.CENTROID.get(0))
+                .map(new ExtractCentroid())
+                .broadcast();
+        
+        DataStream<Feature> features = iter.split(new KmeansSelector())
+                .select(KmeansSelector.FEATURE.get(0))
+                .map(new ExtractFeature())
+                .shuffle();
+        
+        SplitStream<Tuple2<Centroid, Feature>> clustered = centroids.connect(features)
             .flatMap(new ClusterFunction())
             .name("ClusterFunction")
             .split(new KmeansSelector());
         
-        centroidsIter.closeWith(comboStream.select(KmeansSelector.CENTROID_UPDATE.get(0))
-                .map(new MapFunction<Tuple4<Feature,Centroid,Centroid,Feature>, Centroid>() {
-                    private static final long serialVersionUID = 1L;
-
-                    @Override
-                    public Centroid map(Tuple4<Feature,Centroid,Centroid,Feature> value) throws Exception {
-                        return value.f1;
-                    }
-                })
-                .name("Centroid update"));
+        // We have to iterate on features and updates to centroids.
+        iter.closeWith(clustered.select(KmeansSelector.FEATURE.get(0), KmeansSelector.CENTROID.get(0)));
         
-        featuresIter.closeWith(comboStream.select(KmeansSelector.FEATURE.get(0))
-                .map(new MapFunction<Tuple4<Feature,Centroid,Centroid,Feature>, Feature>() {
-                    private static final long serialVersionUID = 1L;
-
-                    @Override
-                    public Feature map(Tuple4<Feature,Centroid,Centroid,Feature> value) throws Exception {
-                        return value.f0;
-                    }
-                })
-                .name("Feature iteration"));
-        
-        comboStream.select(KmeansSelector.CENTROID_OUTPUT.get(0))
-        .map(new MapFunction<Tuple4<Feature,Centroid,Centroid,Feature>, Centroid>() {
-            private static final long serialVersionUID = 1L;
-
-            @Override
-            public Centroid map(Tuple4<Feature,Centroid,Centroid,Feature> value) throws Exception {
-                return value.f2;
-            }
-        })
-        .name("Centroid output")
-        .print();
-        
-        comboStream.select(KmeansSelector.FEATURE_OUTPUT.get(0))
-        .map(new MapFunction<Tuple4<Feature,Centroid,Centroid,Feature>, Feature>() {
-            private static final long serialVersionUID = 1L;
-
-            @Override
-            public Feature map(Tuple4<Feature,Centroid,Centroid,Feature> value) throws Exception {
-                return value.f3;
-            }
-        })
-        .name("Feature output")
-        .addSink(sink);
-        // .name("Feature sink");
-        
+        // Output resulting features (with each one's centroid)
+        clustered.select(KmeansSelector.RESULT.get(0))
+                .addSink(sink);
     }
     
     @SuppressWarnings("serial")
-    private static class KmeansSelector implements OutputSelector<Tuple4<Feature, Centroid, Centroid, Feature>> {
-
-        public static final List<String> FEATURE = Arrays.asList("feature");
-        public static final List<String> FEATURE_OUTPUT = Arrays.asList("feature-output");
-        public static final List<String> CENTROID_UPDATE = Arrays.asList("centroid-update");
-        public static final List<String> CENTROID_OUTPUT = Arrays.asList("centroid-output");
+    private static class ExtractCentroid implements MapFunction<Tuple2<Centroid, Feature>, Centroid> {
 
         @Override
-        public Iterable<String> select(Tuple4<Feature, Centroid, Centroid, Feature> value) {
+        public Centroid map(Tuple2<Centroid, Feature> value) throws Exception {
+            if (value.f0 == null) {
+                LOGGER.warn("Got null centroid for {} ({})", value, System.identityHashCode(value));
+            }
+            
+            return value.f0;
+        }
+    }
+    
+    @SuppressWarnings("serial")
+    private static class ExtractFeature implements MapFunction<Tuple2<Centroid, Feature>, Feature> {
+
+        @Override
+        public Feature map(Tuple2<Centroid, Feature> value) throws Exception {
+            if (value.f1 == null) {
+                LOGGER.warn("Got null feature for {} ({})", value, System.identityHashCode(value));
+            }
+            
+            return value.f1;
+        }
+    }
+    
+    @SuppressWarnings("serial")
+    private static class KmeansSelector implements OutputSelector<Tuple2<Centroid, Feature>> {
+
+        public static final List<String> FEATURE = Arrays.asList("feature");
+        public static final List<String> CENTROID = Arrays.asList("centroid");
+        public static final List<String> RESULT = Arrays.asList("result");
+
+        @Override
+        public Iterable<String> select(Tuple2<Centroid, Feature> value) {
             if (value.f0 != null) {
-                return FEATURE;
+                if (value.f1 != null) {
+                    LOGGER.debug("Returning RESULT for {} ({})", value, System.identityHashCode(value));
+                    return RESULT;
+                } else {
+                    LOGGER.debug("Returning CENTROID for {} ({})", value, System.identityHashCode(value));
+                    return CENTROID;
+                }
             } else if (value.f1 != null) {
-                return CENTROID_UPDATE;
-            } else if (value.f2 != null) {
-                return CENTROID_OUTPUT;
-            } else if (value.f3 != null) {
-                return FEATURE_OUTPUT;
+                LOGGER.debug("Returning FEATURE for {} ({})", value, System.identityHashCode(value));
+                return FEATURE;
             } else {
                 throw new RuntimeException("Invalid case of all fields null");
             }
@@ -120,24 +134,31 @@ public class KMeansClustering {
     }
     
     @SuppressWarnings("serial")
-    private static class ClusterFunction extends RichCoFlatMapFunction<Centroid, Feature, Tuple4<Feature, Centroid, Centroid, Feature>> {
+    private static class ClusterFunction extends RichCoFlatMapFunction<Centroid, Feature, Tuple2<Centroid, Feature>> {
 
         private transient Map<Integer, Centroid> centroids;
-        private transient long centroidTimestamp;
-        
+        protected transient int _parallelism;
+        protected transient int _partition;
+
         @Override
         public void open(Configuration parameters) throws Exception {
             super.open(parameters);
 
+            RuntimeContext context = getRuntimeContext();
+            _parallelism = context.getNumberOfParallelSubtasks();
+            _partition = context.getIndexOfThisSubtask() + 1;
+
             centroids = new HashMap<>();
-            centroidTimestamp = 0;
         }
 
         @Override
-        public void flatMap1(Centroid centroid, Collector<Tuple4<Feature, Centroid, Centroid, Feature>> out) throws Exception {
-            LOGGER.debug("Centroid {} @ {} >> Processing", centroid, centroid.getTime());
+        public void flatMap1(Centroid centroid, Collector<Tuple2<Centroid, Feature>> out) {
+            if (centroid == null) {
+                LOGGER.warn("Null centroid >> Processing ({}/{})", _partition, _parallelism);
+                return;
+            }
             
-            centroidTimestamp = Math.max(centroidTimestamp, centroid.getTime());
+            LOGGER.debug("{} >> Processing ({}/{})", centroid, _partition, _parallelism);
             
             int id = centroid.getId();
             switch (centroid.getType()) {
@@ -153,7 +174,7 @@ public class KMeansClustering {
                     if (!centroids.containsKey(id)) {
                         // We got an add for a cluster that we haven't received yet (could come from another operator),
                         // so send it around again.
-                        out.collect(new Tuple4<>(null, centroid, null, null));
+                        out.collect(new Tuple2<>(centroid, null));
                         return;
                     }
                         
@@ -164,7 +185,7 @@ public class KMeansClustering {
                     if (!centroids.containsKey(id)) {
                         // We got a remove for a cluster that we haven't received yet (could come from another operator),
                         // so send it around again.
-                        out.collect(new Tuple4<>(null, centroid, null, null));
+                        out.collect(new Tuple2<>(centroid, null));
                         return;
                     }
                     
@@ -173,23 +194,18 @@ public class KMeansClustering {
                 
                 default:
                     throw new RuntimeException(String.format("Got unknown centroid type %s!", centroid.getType()));
-                
             }
-            
-            out.collect(new Tuple4<>(null, null, centroids.get(id), null));
         }
 
         @Override
-        public void flatMap2(Feature feature, Collector<Tuple4<Feature,Centroid,Centroid,Feature>> out) throws Exception {
-            if (feature.getTime() > centroidTimestamp) {
-                LOGGER.debug("Feature {} @ {} >> too soon, recycling", feature, feature.getTime());
-                out.collect(new Tuple4<>(feature, null, null, null));
-            } else {
-                processFeature(feature, out);
+        public void flatMap2(Feature feature, Collector<Tuple2<Centroid, Feature>> out) {
+            if (feature == null) {
+                LOGGER.warn("Null feature >> Processing ({}/{})", _partition, _parallelism);
+                return;
             }
-        }
+            
+            LOGGER.debug("{} >> Processing ({}/{})", feature, _partition, _parallelism);
 
-        private void processFeature(Feature feature, Collector<Tuple4<Feature,Centroid,Centroid,Feature>> out) {
             double minDistance = Double.MAX_VALUE;
             Centroid bestCentroid = null;
             for (Centroid centroid : centroids.values()) {
@@ -201,44 +217,40 @@ public class KMeansClustering {
             }
 
             if (bestCentroid == null) {
-                LOGGER.debug("Feature {} @ {} >> No centroids yet, recycling", feature, feature.getTime());
-                feature.setTime(System.currentTimeMillis());
-                out.collect(new Tuple4<>(feature, null, null, null));
-                return;
+                throw new RuntimeException("Got feature without any centroids!");
             }
 
             int oldCentroidId = feature.getCentroidId();
             int newCentroidId = bestCentroid.getId();
             
             if (oldCentroidId == newCentroidId) {
-                feature.incProcessCount();
-                if (feature.getProcessCount() >= 20) {
-                    LOGGER.debug("Feature {} @ {} >> stable, removing", feature, feature.getTime());
-                    out.collect(new Tuple4<>(null, null, null, feature));
+                if (feature.getProcessCount() >= 5) {
+                    LOGGER.debug("{} >> stable, removing", feature);
+                    out.collect(new Tuple2<>(bestCentroid, feature));
                 } else {
-                    LOGGER.debug("Feature {} @ {} >> not stable enough, recycling", feature, feature.getTime());
-                    feature.setTime(System.currentTimeMillis());
-                    out.collect(new Tuple4<>(feature, null, null, null));
+                    LOGGER.debug("{} >> not stable enough, recycling", feature);
+                    Feature updatedFeature = new Feature(feature);
+                    updatedFeature.incProcessCount();
+                    out.collect(new Tuple2<>(null, updatedFeature));
                 }
             } else {
-                feature.setProcessCount(1);
+                Feature updatedFeature = new Feature(feature);
+                updatedFeature.setProcessCount(1);
                 
                 if (oldCentroidId != -1) {
                     Centroid removal = new Centroid(feature.times(feature.getProcessCount()), oldCentroidId, CentroidType.REMOVE);
-                    out.collect(new Tuple4<>(null, removal, null, null));
+                    out.collect(new Tuple2<>(removal, null));
                 }
 
-                LOGGER.debug("Feature {} @ {} >> moving to {}", feature, feature.getTime(), bestCentroid.getId());
-                feature.setCentroidId(newCentroidId);
-                feature.setTime(System.currentTimeMillis());
-                out.collect(new Tuple4<>(feature, null, null, null));
+                LOGGER.debug("{} >> moving to {}", updatedFeature, bestCentroid.getId());
+                updatedFeature.setCentroidId(newCentroidId);
+                out.collect(new Tuple2<>(null, updatedFeature));
             }
             
-            // We'll add the value to the cluster, to continue influencing its
+            // We'll add the feature to the cluster, to continue influencing its
             // centroid.
             Centroid add = new Centroid(feature, newCentroidId, CentroidType.ADD);
-            out.collect(new Tuple4<>(null, add, null, null));
+            out.collect(new Tuple2<>(add, null));
         }
-
     }
 }
