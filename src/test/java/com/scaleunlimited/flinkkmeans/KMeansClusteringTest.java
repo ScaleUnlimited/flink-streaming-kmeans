@@ -40,6 +40,9 @@ public class KMeansClusteringTest {
             Feature f = new Feature(Double.parseDouble(fields[1]),
                     Double.parseDouble(fields[2]));
             centroids.add(new Centroid(f, Integer.parseInt(fields[0]), CentroidType.VALUE));
+            
+            // TODO - remove me.
+            break;
         }
         
         SourceFunction<Centroid> centroidsSource = new ParallelListSource<Centroid>(centroids);
@@ -54,6 +57,9 @@ public class KMeansClusteringTest {
                         Double.parseDouble(fields[1]),
                         Double.parseDouble(fields[2]));
             features.add(clusterize(centroids, f));
+            
+            // TODO - remove me.
+            break;
         }
         
         SourceFunction<Feature> featuresSource = new ParallelListSource<Feature>(features);
@@ -65,16 +71,16 @@ public class KMeansClusteringTest {
         
         env.execute();
         
-        Queue<Tuple2<Centroid, Feature>> results = InMemorySinkFunction.getValues();
+        Queue<CentroidFeature> results = InMemorySinkFunction.getValues();
         assertEquals(points.length, results.size());
         
         Map<Integer, Centroid> clusters = ClusterizePoints.createCentroids(points);
         
         while (!results.isEmpty()) {
-            Tuple2<Centroid, Feature> result = results.remove();
-            Centroid c = result.f0;
-            Feature f = result.f1;
-            LOGGER.info("Feature {} assigned to centroid {} at {},{}", f, c.getId(), f.getX(), f.getY());
+            CentroidFeature result = results.remove();
+            Centroid c = result.getCentroid();
+            Feature f = result.getFeature();
+            LOGGER.info("Feature {} assigned to centroid {} at {},{}", f, c.getId(), c.getFeature().getX(), c.getFeature().getY());
             
             if (f.getCentroidId() != f.getTargetCentroidId()) {
                 double actualDistance = f.distance(clusters.get(f.getCentroidId()).getFeature());
@@ -155,18 +161,18 @@ public class KMeansClusteringTest {
     }
 
     @SuppressWarnings("serial")
-    private static class InMemorySinkFunction extends RichSinkFunction<Tuple2<Centroid, Feature>> {
+    private static class InMemorySinkFunction extends RichSinkFunction<CentroidFeature> {
         
         // Static, so all parallel functions will write to the same queue
-        static private Queue<Tuple2<Centroid, Feature>> _values = new ConcurrentLinkedQueue<>();
+        static private Queue<CentroidFeature> _values = new ConcurrentLinkedQueue<>();
         
-        public static Queue<Tuple2<Centroid, Feature>> getValues() {
+        public static Queue<CentroidFeature> getValues() {
             return _values;
         }
         
         @Override
-        public void invoke(Tuple2<Centroid, Feature> value) throws Exception {
-            LOGGER.debug("Adding feature {} for centroid {}", value.f1, value.f0);
+        public void invoke(CentroidFeature value) throws Exception {
+            LOGGER.debug("Adding feature {} for centroid {}", value.getFeature(), value.getCentroid());
             _values.add(value);
         }
     }

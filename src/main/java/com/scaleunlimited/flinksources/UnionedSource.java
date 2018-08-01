@@ -139,12 +139,13 @@ public class UnionedSource<T0, T1> extends RichParallelSourceFunction<Tuple2<T0,
                 LOGGER.info("Running source 0");
                 source0.run(s0ctx);
                 sourceId += 1;
+                Thread.sleep(1000L);
             } else if (sourceId == 1) {
                 LOGGER.info("Running source 1");
                 source1.run(s1ctx);
                 sourceId += 1;
             } else {
-                Thread.sleep(5000);
+                Thread.sleep(5000L);
                 isRunning = false;
             }
         }

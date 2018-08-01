@@ -4,7 +4,6 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.RuntimeContext;
@@ -15,7 +14,6 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.IterativeStream;
-import org.apache.flink.streaming.api.datastream.SplitStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.RichCoFlatMapFunction;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
@@ -49,12 +47,16 @@ public class KMeansClustering {
 
     public static void build(StreamExecutionEnvironment env, 
             SourceFunction<Centroid> centroidsSource, SourceFunction<Feature> featuresSource,
-            SinkFunction<Tuple2<Centroid, Feature>> sink) {
+            SinkFunction<CentroidFeature> sink) {
         
         TypeInformation<Tuple2<Centroid, Feature>> type = TypeInformation.of(new TypeHint<Tuple2<Centroid, Feature>>(){});
         UnionedSource<Centroid, Feature> source = new UnionedSource<>(type, centroidsSource, featuresSource);
 
-        IterativeStream<Tuple2<Centroid, Feature>> iter = env.addSource(source).iterate(5000L);
+        IterativeStream<CentroidFeature> iter = env.addSource(source)
+                .map(new Tuple2ToCentroidFeature())
+                .iterate(5000L);
+//        DataStream<CentroidFeature> iter = env.addSource(source)
+//                .map(new Tuple2ToCentroidFeature());
         
         // Now comes some funky stuff. We want to broadcast centroids, but shuffle features. So we
         // have to split the stream, apply the appropriate distribution, and the re-combine.
@@ -68,64 +70,74 @@ public class KMeansClustering {
                 .map(new ExtractFeature())
                 .shuffle();
         
-        SplitStream<Tuple2<Centroid, Feature>> clustered = centroids.connect(features)
+        DataStream<CentroidFeature> clustered = centroids.connect(features)
             .flatMap(new ClusterFunction())
-            .name("ClusterFunction")
-            .split(new KmeansSelector());
+            .name("ClusterFunction");
         
         // We have to iterate on features and updates to centroids.
-        iter.closeWith(clustered.select(KmeansSelector.FEATURE.get(0), KmeansSelector.CENTROID.get(0)));
+         iter.closeWith(clustered);
         
         // Output resulting features (with each one's centroid)
-        clustered.select(KmeansSelector.RESULT.get(0))
-                .addSink(sink);
+        clustered.split(new KmeansSelector())
+            .select(KmeansSelector.RESULT.get(0))
+            .addSink(sink);
     }
     
     @SuppressWarnings("serial")
-    private static class ExtractCentroid implements MapFunction<Tuple2<Centroid, Feature>, Centroid> {
+    private static class Tuple2ToCentroidFeature implements MapFunction<Tuple2<Centroid, Feature>, CentroidFeature> {
 
         @Override
-        public Centroid map(Tuple2<Centroid, Feature> value) throws Exception {
-            if (value.f0 == null) {
+        public CentroidFeature map(Tuple2<Centroid, Feature> value) throws Exception {
+            return new CentroidFeature(value.f0, value.f1);
+        }
+        
+    }
+    
+    @SuppressWarnings("serial")
+    private static class ExtractCentroid implements MapFunction<CentroidFeature, Centroid> {
+
+        @Override
+        public Centroid map(CentroidFeature value) throws Exception {
+            if (value.getCentroid() == null) {
                 LOGGER.warn("Got null centroid for {} ({})", value, System.identityHashCode(value));
             }
             
-            return value.f0;
+            return value.getCentroid();
         }
     }
     
     @SuppressWarnings("serial")
-    private static class ExtractFeature implements MapFunction<Tuple2<Centroid, Feature>, Feature> {
+    private static class ExtractFeature implements MapFunction<CentroidFeature, Feature> {
 
         @Override
-        public Feature map(Tuple2<Centroid, Feature> value) throws Exception {
-            if (value.f1 == null) {
-                LOGGER.warn("Got null feature for {} ({})", value, System.identityHashCode(value));
+        public Feature map(CentroidFeature value) throws Exception {
+            if (value.getFeature() == null) {
+                LOGGER.warn("Got null feature for {})", value);
             }
             
-            return value.f1;
+            return value.getFeature();
         }
     }
     
     @SuppressWarnings("serial")
-    private static class KmeansSelector implements OutputSelector<Tuple2<Centroid, Feature>> {
+    private static class KmeansSelector implements OutputSelector<CentroidFeature> {
 
         public static final List<String> FEATURE = Arrays.asList("feature");
         public static final List<String> CENTROID = Arrays.asList("centroid");
         public static final List<String> RESULT = Arrays.asList("result");
 
         @Override
-        public Iterable<String> select(Tuple2<Centroid, Feature> value) {
-            if (value.f0 != null) {
-                if (value.f1 != null) {
-                    LOGGER.debug("Returning RESULT for {} ({})", value, System.identityHashCode(value));
+        public Iterable<String> select(CentroidFeature value) {
+            if (value.getCentroid() != null) {
+                if (value.getFeature() != null) {
+                    LOGGER.debug("Returning RESULT for {}", value);
                     return RESULT;
                 } else {
-                    LOGGER.debug("Returning CENTROID for {} ({})", value, System.identityHashCode(value));
+                    LOGGER.debug("Returning CENTROID for {}", value);
                     return CENTROID;
                 }
-            } else if (value.f1 != null) {
-                LOGGER.debug("Returning FEATURE for {} ({})", value, System.identityHashCode(value));
+            } else if (value.getFeature() != null) {
+                LOGGER.debug("Returning FEATURE for {}", value);
                 return FEATURE;
             } else {
                 throw new RuntimeException("Invalid case of all fields null");
@@ -134,7 +146,7 @@ public class KMeansClustering {
     }
     
     @SuppressWarnings("serial")
-    private static class ClusterFunction extends RichCoFlatMapFunction<Centroid, Feature, Tuple2<Centroid, Feature>> {
+    private static class ClusterFunction extends RichCoFlatMapFunction<Centroid, Feature, CentroidFeature> {
 
         private transient Map<Integer, Centroid> centroids;
         protected transient int _parallelism;
@@ -152,7 +164,7 @@ public class KMeansClustering {
         }
 
         @Override
-        public void flatMap1(Centroid centroid, Collector<Tuple2<Centroid, Feature>> out) {
+        public void flatMap1(Centroid centroid, Collector<CentroidFeature> out) {
             if (centroid == null) {
                 LOGGER.warn("Null centroid >> Processing ({}/{})", _partition, _parallelism);
                 return;
@@ -174,7 +186,7 @@ public class KMeansClustering {
                     if (!centroids.containsKey(id)) {
                         // We got an add for a cluster that we haven't received yet (could come from another operator),
                         // so send it around again.
-                        out.collect(new Tuple2<>(centroid, null));
+                        out.collect(new CentroidFeature(centroid));
                         return;
                     }
                         
@@ -185,7 +197,7 @@ public class KMeansClustering {
                     if (!centroids.containsKey(id)) {
                         // We got a remove for a cluster that we haven't received yet (could come from another operator),
                         // so send it around again.
-                        out.collect(new Tuple2<>(centroid, null));
+                        out.collect(new CentroidFeature(centroid));
                         return;
                     }
                     
@@ -198,7 +210,7 @@ public class KMeansClustering {
         }
 
         @Override
-        public void flatMap2(Feature feature, Collector<Tuple2<Centroid, Feature>> out) {
+        public void flatMap2(Feature feature, Collector<CentroidFeature> out) {
             if (feature == null) {
                 LOGGER.warn("Null feature >> Processing ({}/{})", _partition, _parallelism);
                 return;
@@ -226,12 +238,12 @@ public class KMeansClustering {
             if (oldCentroidId == newCentroidId) {
                 if (feature.getProcessCount() >= 5) {
                     LOGGER.debug("{} >> stable, removing", feature);
-                    out.collect(new Tuple2<>(bestCentroid, feature));
+                    out.collect(new CentroidFeature(bestCentroid, feature));
                 } else {
                     LOGGER.debug("{} >> not stable enough, recycling", feature);
                     Feature updatedFeature = new Feature(feature);
                     updatedFeature.incProcessCount();
-                    out.collect(new Tuple2<>(null, updatedFeature));
+                    out.collect(new CentroidFeature(updatedFeature));
                 }
             } else {
                 Feature updatedFeature = new Feature(feature);
@@ -239,18 +251,18 @@ public class KMeansClustering {
                 
                 if (oldCentroidId != -1) {
                     Centroid removal = new Centroid(feature.times(feature.getProcessCount()), oldCentroidId, CentroidType.REMOVE);
-                    out.collect(new Tuple2<>(removal, null));
+                    out.collect(new CentroidFeature(removal));
                 }
 
                 LOGGER.debug("{} >> moving to {}", updatedFeature, bestCentroid.getId());
                 updatedFeature.setCentroidId(newCentroidId);
-                out.collect(new Tuple2<>(null, updatedFeature));
+                out.collect(new CentroidFeature(updatedFeature));
             }
             
             // We'll add the feature to the cluster, to continue influencing its
             // centroid.
             Centroid add = new Centroid(feature, newCentroidId, CentroidType.ADD);
-            out.collect(new Tuple2<>(add, null));
+            out.collect(new CentroidFeature(add));
         }
     }
 }

@@ -42,7 +42,7 @@ public class ParallelListSource<T> extends RichSourceFunction<T> {
         while (_running && iter.hasNext()) {
             T element = iter.next();
             if ((index % _parallelism) == _subtaskIndex) {
-                LOGGER.debug("Emitting {} element at {} for subtask {}", element.getClass().getSimpleName(), index, _subtaskIndex);
+                LOGGER.debug("Emitting {} at index {} for subtask {}", element.toString(), index, _subtaskIndex);
                 ctx.collect(element);
             }
             

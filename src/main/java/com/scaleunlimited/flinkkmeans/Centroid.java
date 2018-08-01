@@ -13,8 +13,16 @@ public class Centroid implements Serializable {
     public Centroid() {
     }
 
+    public Centroid(Centroid c) {
+        this(c.feature, c.id, c.type);
+        
+        this.numFeatures = c.numFeatures;
+    }
+
     public Centroid(Feature f, int centroidId, CentroidType type) {
-        this.feature = f;
+        this.feature = new Feature(f);
+        this.feature.setId(-1);
+        
         this.id = centroidId;
         this.type = type;
         this.numFeatures = 1;
@@ -59,7 +67,8 @@ public class Centroid implements Serializable {
     }
     
     public void setFeature(Feature feature) {
-        this.feature = feature;
+        this.feature = new Feature(feature);
+        this.feature.setId(-1);
     }
     
     public int getNumFeatures() {
