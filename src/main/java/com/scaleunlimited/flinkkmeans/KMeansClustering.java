@@ -52,23 +52,24 @@ public class KMeansClustering {
         TypeInformation<Tuple2<Centroid, Feature>> type = TypeInformation.of(new TypeHint<Tuple2<Centroid, Feature>>(){});
         UnionedSource<Centroid, Feature> source = new UnionedSource<>(type, centroidsSource, featuresSource);
 
-        IterativeStream<CentroidFeature> iter = env.addSource(source)
-                .map(new Tuple2ToCentroidFeature())
-                .iterate(5000L);
-//        DataStream<CentroidFeature> iter = env.addSource(source)
-//                .map(new Tuple2ToCentroidFeature());
+        DataStream<CentroidFeature> primer = env.addSource(source)
+                .map(new Tuple2ToCentroidFeature());
+        
+        
         
         // Now comes some funky stuff. We want to broadcast centroids, but shuffle features. So we
         // have to split the stream, apply the appropriate distribution, and the re-combine.
-        DataStream<Centroid> centroids = iter.split(new KmeansSelector())
+        IterativeStream<Centroid> centroids = primer.split(new KmeansSelector())
                 .select(KmeansSelector.CENTROID.get(0))
                 .map(new ExtractCentroid())
-                .broadcast();
+                .broadcast()
+                .iterate(5000L);
         
-        DataStream<Feature> features = iter.split(new KmeansSelector())
+        IterativeStream<Feature> features = primer.split(new KmeansSelector())
                 .select(KmeansSelector.FEATURE.get(0))
                 .map(new ExtractFeature())
-                .shuffle();
+                .shuffle()
+                .iterate(5000L);
         
         DataStream<CentroidFeature> clustered = centroids.connect(features)
             .flatMap(new ClusterFunction())
