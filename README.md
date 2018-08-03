@@ -12,4 +12,4 @@ Features are repeatedly processed until they are "stable", which we define as no
 
 We broadcast the initial centroids and the deltas (feature addition and deletion) to all ClusterFunction operators. Features are shuffled (randomly partitioned) between ClusterFunction operators.
 
-The output of the ClusterFunction is a Tuple4 which contains either a feature being iterated on, a cluster update, a cluster result, or a finalized feature. So one field in the Tuple4 will always be set, and the other three will be null. This stream is then split, with iterated features and cluster updates being used to close the corresponding Flink iteration.
+The side outputs of the ClusterFunction are updates to Centroids, and features that aren't yet stable. These close out the centroid and feature iteration streams. The regular output from the ClusterFunction is a stable Feature, plus the current Centroid it's assigned to.
