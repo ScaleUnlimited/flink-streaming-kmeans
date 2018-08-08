@@ -1,5 +1,7 @@
 package com.scaleunlimited.flinksources;
 
+import java.io.Serializable;
+
 /**
  * Base class for terminating a source function after all of the output
  * has been generated. This is needed when a source is feeding an iteration,
@@ -7,7 +9,8 @@ package com.scaleunlimited.flinksources;
  * for functions in the iteration.
  *
  */
-public abstract class SourceTerminator {
+@SuppressWarnings("serial")
+public abstract class SourceTerminator implements Serializable {
 
     public abstract boolean isTerminated();
     

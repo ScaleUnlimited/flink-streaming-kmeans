@@ -55,8 +55,7 @@ public class KMeansClustering {
         TypeInformation<Tuple2<Centroid, Feature>> type = TypeInformation.of(new TypeHint<Tuple2<Centroid, Feature>>(){});
         UnionedSource<Centroid, Feature> source = new UnionedSource<>(type, centroidsSource, featuresSource);
         
-        // We need to wait for 
-        TODO - pass in terminator to the build() method, as the test code knows what it wants.
+        // TODO - pass in terminator to the build() method, as the test code knows what it wants.
         source.setTerminator(new TimedTerminator(5000L));
         
         DataStream<CentroidFeature> primer = env.addSource(source)
