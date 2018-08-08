@@ -26,6 +26,7 @@ public class UnionedSource<T0, T1> extends RichParallelSourceFunction<Tuple2<T0,
     private TypeInformation<Tuple2<T0, T1>> type;
     private SourceFunction<T0> source0;
     private SourceFunction<T1> source1;
+    private SourceTerminator terminator;
     
     private volatile transient boolean isRunning;
     private transient int sourceId;
@@ -34,6 +35,11 @@ public class UnionedSource<T0, T1> extends RichParallelSourceFunction<Tuple2<T0,
         this.type = type;
         this.source0 = source0;
         this.source1 = source1;
+        this.terminator = new NeverTerminate();
+    }
+    
+    public void setTerminator(SourceTerminator terminator) {
+        this.terminator = terminator;
     }
     
     @Override
@@ -131,7 +137,6 @@ public class UnionedSource<T0, T1> extends RichParallelSourceFunction<Tuple2<T0,
             public void close() {
                 context.close();
             }
-            
         };
         
         while (isRunning) {
@@ -144,13 +149,13 @@ public class UnionedSource<T0, T1> extends RichParallelSourceFunction<Tuple2<T0,
                 LOGGER.info("Running source 1");
                 source1.run(s1ctx);
                 sourceId += 1;
-            } else {
-                Thread.sleep(5000L);
+                LOGGER.info("Done with both sources");
+            } else if (terminator.isTerminated()) {
                 isRunning = false;
+            } else {
+                Thread.sleep(10L);
             }
         }
-        
-        LOGGER.info("Done with both sources");
     }
 
     @Override
@@ -168,5 +173,13 @@ public class UnionedSource<T0, T1> extends RichParallelSourceFunction<Tuple2<T0,
     @Override
     public TypeInformation<Tuple2<T0, T1>> getProducedType() {
         return type;
+    }
+    
+    private static class NeverTerminate extends SourceTerminator {
+
+        @Override
+        public boolean isTerminated() {
+            return false;
+        }
     }
 }

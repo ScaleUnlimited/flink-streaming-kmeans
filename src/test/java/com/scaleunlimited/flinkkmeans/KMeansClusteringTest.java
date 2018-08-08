@@ -14,13 +14,10 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.flink.api.common.functions.RichMapFunction;
-import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,9 +37,6 @@ public class KMeansClusteringTest {
             Feature f = new Feature(Double.parseDouble(fields[1]),
                     Double.parseDouble(fields[2]));
             centroids.add(new Centroid(f, Integer.parseInt(fields[0]), CentroidType.VALUE));
-            
-            // TODO - remove me.
-            break;
         }
         
         SourceFunction<Centroid> centroidsSource = new ParallelListSource<Centroid>(centroids);
@@ -57,9 +51,6 @@ public class KMeansClusteringTest {
                         Double.parseDouble(fields[1]),
                         Double.parseDouble(fields[2]));
             features.add(clusterize(centroids, f));
-            
-            // TODO - remove me.
-            break;
         }
         
         SourceFunction<Feature> featuresSource = new ParallelListSource<Feature>(features);
@@ -80,7 +71,9 @@ public class KMeansClusteringTest {
             CentroidFeature result = results.remove();
             Centroid c = result.getCentroid();
             Feature f = result.getFeature();
-            LOGGER.info("Feature {} assigned to centroid {} at {},{}", f, c.getId(), c.getFeature().getX(), c.getFeature().getY());
+            LOGGER.info("Feature {} at {},{} assigned to centroid {} at {},{}", 
+                    f.getId(), f.getX(), f.getY(),
+                    c.getId(), c.getFeature().getX(), c.getFeature().getY());
             
             if (f.getCentroidId() != f.getTargetCentroidId()) {
                 double actualDistance = f.distance(clusters.get(f.getCentroidId()).getFeature());
@@ -95,7 +88,16 @@ public class KMeansClusteringTest {
         }
     }
 
-    private Feature clusterize(List<Centroid> centroids, Feature value) throws Exception {
+    /**
+     * To create more realistic data, we'll perturb features (points) towards the
+     * closest centroid (cluster)
+     * 
+     * @param centroids List of starting centroids
+     * @param value Feature to clusterize
+     * @return modified Feature
+     * @throws Exception
+     */
+    private Feature clusterize(List<Centroid> centroids, Feature value) {
         double minDistance = Double.MAX_VALUE;
         Centroid bestCentroid = null;
         for (Centroid centroid : centroids) {
@@ -109,52 +111,50 @@ public class KMeansClusteringTest {
         // Move the point part of the way to the best centroid cluster
         double newX = value.getX() - (value.getX() - bestCentroid.getFeature().getX()) * 0.3;
         double newY = value.getY() - (value.getY() - bestCentroid.getFeature().getY()) * 0.3;
-        
-//        LOGGER.debug(String.format("Moving towards cluster %d (%f,%f): %f,%f => %f,%f", 
-//                bestCentroid.getId(), bestCentroid.getFeature().getX(), bestCentroid.getFeature().getY(),
-//                value.getX(), value.getY(), newX, newY));
         return new Feature(value.getId(), newX, newY, -1, bestCentroid.getId());
     }
 
-    @Ignore
     @Test
     public void testSyntheticData() throws Exception {
         final StreamExecutionEnvironment env = 
                 StreamExecutionEnvironment.createLocalEnvironment(2);
 
         final int numCentroids = 2;
-        Centroid[] centroids = makeCentroids(numCentroids);
-        DataStream<Centroid> centroidsSource = env.fromElements(Centroid.class, centroids);
+        List<Centroid> centroids = makeCentroids(numCentroids);
+        SourceFunction<Centroid> centroidsSource = new ParallelListSource<Centroid>(centroids);
 
         final int numPoints = numCentroids * 100;
-        DataStream<Feature> featuresSource = env.fromElements(Feature.class,
-                makeFeatures(centroids, numPoints));
+        List<Feature> features = makeFeatures(centroids, numPoints);
+        SourceFunction<Feature> featuresSource = new ParallelListSource<Feature>(features);
 
         InMemorySinkFunction sink = new InMemorySinkFunction();
-        // KMeansClustering.build(env, centroidsSource, featuresSource, sink);
-
+        
+        KMeansClustering.build(env, centroidsSource, featuresSource, sink);
         env.execute();
+
+        Queue<CentroidFeature> results = InMemorySinkFunction.getValues();
+        assertEquals(features.size(), results.size());
     }
 
-    private static Centroid[] makeCentroids(int numCentroids) {
-        Centroid[] result = new Centroid[numCentroids];
+    private static List<Centroid> makeCentroids(int numCentroids) {
+        List<Centroid> result = new ArrayList<>(numCentroids);
         for (int i = 0; i < numCentroids; i++) {
             int x = ((i + 1) * 10);
             int y = ((i + 1) * 20);
-            result[i] = new Centroid(new Feature(x, y), i, CentroidType.VALUE);
+            result.add(new Centroid(new Feature(x, y), i, CentroidType.VALUE));
         }
 
         return result;
     }
 
-    private static Feature[] makeFeatures(Centroid[] centroids, int numFeatures) {
-        int numCentroids = centroids.length;
+    private static List<Feature> makeFeatures(List<Centroid> centroids, int numFeatures) {
+        int numCentroids = centroids.size();
         Random rand = new Random(0L);
-        Feature[] result = new Feature[numFeatures];
+        List<Feature> result = new ArrayList<>(numFeatures);
         for (int i = 0; i < numFeatures; i++) {
             double x = rand.nextDouble() * 10 * numCentroids;
             double y = rand.nextDouble() * 20 * numCentroids;
-            result[i] = new Feature(x, y);
+            result.add(new Feature(i, x, y));
         }
 
         return result;
