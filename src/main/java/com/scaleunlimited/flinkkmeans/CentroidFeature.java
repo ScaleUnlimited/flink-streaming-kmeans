@@ -26,12 +26,25 @@ public class CentroidFeature implements Serializable {
         }
     }
 
+    public CentroidFeature(CentroidFeature cf) {
+        this.centroid = new Centroid(cf.centroid);
+        this.feature = new Feature(cf.feature);
+    }
+    
     public Centroid getCentroid() {
         return centroid;
     }
 
+    public void setCentroid(Centroid centroid) {
+        this.centroid = centroid;
+    }
+    
     public Feature getFeature() {
         return feature;
+    }
+    
+    public void setFeature(Feature feature) {
+        this.feature = feature;
     }
     
     @Override

@@ -9,7 +9,6 @@ public class Feature implements Serializable {
     private double y;
     private int centroidId;
     private int processCount;
-    private int targetCentroidId;
     
     public Feature() {
         this(-1, 0, 0);
@@ -24,20 +23,15 @@ public class Feature implements Serializable {
     }
 
     public Feature(int id, double x, double y, int centroidId) {
-        this(id, x, y, centroidId, -1);
-    }
-
-    public Feature(int id, double x, double y, int centroidId, int targetCentroidId) {
         this.id = id;
         this.x = x;
         this.y = y;
         this.centroidId = centroidId;
-        this.targetCentroidId = targetCentroidId;
         this.processCount = 0;
     }
 
     public Feature(Feature p) {
-        this(p.getId(), p.getX(), p.getY(), p.getCentroidId(), p.getTargetCentroidId());
+        this(p.getId(), p.getX(), p.getY(), p.getCentroidId());
         this.processCount = p.processCount;
     }
 
@@ -71,14 +65,6 @@ public class Feature implements Serializable {
 
     public void setCentroidId(int centroidId) {
         this.centroidId = centroidId;
-    }
-    
-    public int getTargetCentroidId() {
-        return targetCentroidId;
-    }
-    
-    public void setTargetCentroidId(int targetCentroidId) {
-        this.targetCentroidId = targetCentroidId;
     }
     
     public int getProcessCount() {

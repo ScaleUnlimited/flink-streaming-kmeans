@@ -186,7 +186,7 @@ public class KMeansClustering {
                         throw new RuntimeException(String.format("Got initial centroid %s but it already exists!", centroid));
                     }
                     
-                    centroids.put(id, centroid);
+                    centroids.put(id, new Centroid(centroid));
                 break;
                 
                 case ADD:
