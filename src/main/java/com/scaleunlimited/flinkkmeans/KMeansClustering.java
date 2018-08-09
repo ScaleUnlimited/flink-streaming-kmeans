@@ -25,7 +25,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.scaleunlimited.flinksources.TimedTerminator;
-import com.scaleunlimited.flinksources.UnionedSource;
+import com.scaleunlimited.flinksources.UnionedSources;
 
 /**
  * Cluster points via K-Means clustering. The algorithm is:
@@ -53,7 +53,7 @@ public class KMeansClustering {
             SinkFunction<CentroidFeature> sink) {
         
         TypeInformation<Tuple2<Centroid, Feature>> type = TypeInformation.of(new TypeHint<Tuple2<Centroid, Feature>>(){});
-        UnionedSource<Centroid, Feature> source = new UnionedSource<>(type, centroidsSource, featuresSource);
+        UnionedSources<Centroid, Feature> source = new UnionedSources<>(type, centroidsSource, featuresSource);
         
         // TODO - pass in terminator to the build() method, as the test code knows what it wants.
         source.setTerminator(new TimedTerminator(5000L));
