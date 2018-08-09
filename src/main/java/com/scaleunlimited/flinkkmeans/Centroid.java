@@ -1,21 +1,30 @@
 package com.scaleunlimited.flinkkmeans;
 
-public class Centroid {
+import java.io.Serializable;
 
-    private CentroidType type;
-    private long time;
+@SuppressWarnings("serial")
+public class Centroid implements Serializable {
+
     private Feature feature;
     private int id;
+    private CentroidType type;
     private int numFeatures;
     
     public Centroid() {
     }
 
+    public Centroid(Centroid c) {
+        this(c.feature, c.id, c.type);
+        
+        this.numFeatures = c.numFeatures;
+    }
+
     public Centroid(Feature f, int centroidId, CentroidType type) {
-        this.time = System.currentTimeMillis();
-        this.type = type;
-        this.feature = f;
+        this.feature = new Feature(f);
+        this.feature.setId(-1);
+        
         this.id = centroidId;
+        this.type = type;
         this.numFeatures = 1;
     }
 
@@ -58,7 +67,8 @@ public class Centroid {
     }
     
     public void setFeature(Feature feature) {
-        this.feature = feature;
+        this.feature = new Feature(feature);
+        this.feature.setId(-1);
     }
     
     public int getNumFeatures() {
@@ -69,16 +79,8 @@ public class Centroid {
         this.numFeatures = numFeatures;
     }
 
-    public long getTime() {
-        return time;
-    }
-    
-    public void setTime(long time) {
-        this.time = time;
-    }
-    
     @Override
     public String toString() {
-        return String.format("%d (%s) %s with %d features", id, type, feature.toString(), numFeatures);
+        return String.format("Centroid %d (%s) %s with %d features", id, type, feature.toString(), numFeatures);
     }
 }

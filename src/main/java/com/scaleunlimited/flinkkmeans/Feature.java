@@ -1,13 +1,14 @@
 package com.scaleunlimited.flinkkmeans;
 
-public class Feature {
+import java.io.Serializable;
+
+@SuppressWarnings("serial")
+public class Feature implements Serializable {
     private int id;
-    private long time;
-    private int processCount;
     private double x;
     private double y;
     private int centroidId;
-    private int targetCentroidId;
+    private int processCount;
     
     public Feature() {
         this(-1, 0, 0);
@@ -22,22 +23,16 @@ public class Feature {
     }
 
     public Feature(int id, double x, double y, int centroidId) {
-        this(id, x, y, centroidId, -1);
-    }
-
-    public Feature(int id, double x, double y, int centroidId, int targetCentroidId) {
         this.id = id;
-        this.time = System.currentTimeMillis();
         this.x = x;
         this.y = y;
         this.centroidId = centroidId;
-        this.targetCentroidId = targetCentroidId;
         this.processCount = 0;
     }
 
     public Feature(Feature p) {
         this(p.getId(), p.getX(), p.getY(), p.getCentroidId());
-        this.time = p.getTime();
+        this.processCount = p.processCount;
     }
 
     public int getId() {
@@ -70,22 +65,6 @@ public class Feature {
 
     public void setCentroidId(int centroidId) {
         this.centroidId = centroidId;
-    }
-    
-    public int getTargetCentroidId() {
-        return targetCentroidId;
-    }
-    
-    public void setTargetCentroidId(int targetCentroidId) {
-        this.targetCentroidId = targetCentroidId;
-    }
-    
-    public long getTime() {
-        return time;
-    }
-    
-    public void setTime(long time) {
-        this.time = time;
     }
     
     public int getProcessCount() {
@@ -131,9 +110,9 @@ public class Feature {
     @Override
     public String toString() {
         if (centroidId != -1) {
-            return String.format("%f,%f (%s)", x, y, centroidId);
+            return String.format("Feature %d: %f,%f (centroid %s, count %d)", id, x, y, centroidId, processCount);
         } else {
-            return String.format("%f,%f", x, y);
+            return String.format("Feature %d: %f,%f (unassigned)", id, x, y);
         }
     }
 }
