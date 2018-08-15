@@ -1,24 +1,24 @@
 package com.scaleunlimited.flinkkmeans;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.collector.selector.OutputSelector;
-import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.IterativeStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
+import org.apache.flink.streaming.api.datastream.SplitStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.CoProcessFunction;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
+import org.apache.flink.types.Either;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 import org.slf4j.Logger;
@@ -30,127 +30,83 @@ import com.scaleunlimited.flinksources.UnionedSources;
 /**
  * Cluster points via K-Means clustering. The algorithm is:
  *   - Start with N random clusters (centroids)
- *   - Randomly shuffle features (unassigned to centroids) to the ClusterFunction
+ *   - Randomly shuffle features to the ClusterFunction
  *      - Assign each feature to the nearest centroid
  *      - If the nearest centroid is different for that feature,
  *        remove the feature from the old centroid (output special centroid),
  *        add the feature to the new centroid (output special centroid),
  *        and reset the feature's "stable centroid" counter.
+ *      - If the nearest centroid is the same as before, increment
+ *        a counter. If the counter is < some "stable" limit, send
+ *        the feature around again (iterate on it) via a side output,
+ *        otherwise collect it - this then removes it from the iteration.
  *   - Broadcast centroids to every ClusterFunction
  *      - If it's a "regular" centroid, just record it.
  *      - If it's special "feature added" or "feature removed" centroid, update
- *        the centroid.
+ *        the corresponding centroid.
  *
  * Features are iterated on until their stable centroid counter reaches a target,
- * and which time they get emitted, along with the centroid they belong to.
+ * and which time they get emitted, along with the centroid they belong to. Note
+ * that centroids can and will move around, thus the location of centroid id X
+ * won't be constant in the output stream.
  *
  */
 public class KMeansClustering {
     private static final Logger LOGGER = LoggerFactory.getLogger(KMeansClustering.class);
 
+    private static final String CENTROID_TAG = "centroid";
+    private static final List<String> CENTROID_SELECTOR = Collections.singletonList(CENTROID_TAG);
+    
+    private static final String FEATURE_TAG = "feature";
+    private static final List<String> FEATURE_SELECTOR = Collections.singletonList(FEATURE_TAG);
+    
     public static void build(StreamExecutionEnvironment env, 
             SourceFunction<Centroid> centroidsSource, SourceFunction<Feature> featuresSource,
-            SinkFunction<CentroidFeature> sink) {
+            SinkFunction<FeatureResult> sink) {
         
-        TypeInformation<Tuple2<Centroid, Feature>> type = TypeInformation.of(new TypeHint<Tuple2<Centroid, Feature>>(){});
+        TypeInformation<Either<Centroid, Feature>> type = TypeInformation.of(new TypeHint<Either<Centroid, Feature>>(){});
         UnionedSources<Centroid, Feature> source = new UnionedSources<>(type, centroidsSource, featuresSource);
         
         // TODO - pass in terminator to the build() method, as the test code knows what it wants.
         source.setTerminator(new TimedTerminator(5000L));
         
-        DataStream<CentroidFeature> primer = env.addSource(source)
-                .map(new Tuple2ToCentroidFeature());
+        // Split the stream into centroids and features, then set up separate iterations for
+        // each one. Centroids are broadcast, while features are shuffled.
+        SplitStream<Either<Centroid, Feature>> primer = env.addSource(source)
+                .name("centroids and features")
+                .split(either -> either.isLeft() ? CENTROID_SELECTOR : FEATURE_SELECTOR);
         
-        // Now comes some funky stuff. We want to broadcast centroids, but shuffle features. So we
-        // have to split the stream, apply the appropriate distribution, and the re-combine.
-        IterativeStream<Centroid> centroids = primer.split(new KmeansSelector())
-                .select(KmeansSelector.CENTROID.get(0))
-                .map(new ExtractCentroid())
+        IterativeStream<Centroid> centroids = primer.select(CENTROID_TAG)
+                .map(either -> either.left())
+                .name("centroids")
+                .returns(Centroid.class)
+                .iterate(5000L);
+        
+        IterativeStream<Feature> features = primer.select(FEATURE_TAG)
+                .map(either -> either.right())
+                .name("features")
+                .returns(Feature.class)
+                .iterate(5000L);
+        
+        SingleOutputStreamOperator<FeatureResult> clustered = centroids
                 .broadcast()
-                .iterate(5000L);
+                .connect(features.shuffle())
+                .process(new ClusterFunction())
+                .name("ClusterFunction");
         
-        IterativeStream<Feature> features = primer.split(new KmeansSelector())
-                .select(KmeansSelector.FEATURE.get(0))
-                .map(new ExtractFeature())
-                .shuffle()
-                .iterate(5000L);
-        
-        SingleOutputStreamOperator<CentroidFeature> clustered = centroids.connect(features)
-            .process(new ClusterFunction())
-            .name("ClusterFunction");
-        
-        // We have to iterate on features and updates to centroids.
+        // We have to iterate on features, and centroid updates.
         features.closeWith(clustered.getSideOutput(ClusterFunction.FEATURE_OUTPUT_TAG));
         centroids.closeWith(clustered.getSideOutput(ClusterFunction.CENTROID_OUTPUT_TAG));
         
-        // Output resulting features (with each one's centroid)
-        clustered.addSink(sink);
+        // Output resulting features (with each one's current centroid)
+        clustered.addSink(sink)
+            .name("results");
     }
     
-    @SuppressWarnings("serial")
-    private static class Tuple2ToCentroidFeature implements MapFunction<Tuple2<Centroid, Feature>, CentroidFeature> {
 
-        @Override
-        public CentroidFeature map(Tuple2<Centroid, Feature> value) throws Exception {
-            return new CentroidFeature(value.f0, value.f1);
-        }
-        
-    }
     
     @SuppressWarnings("serial")
-    private static class ExtractCentroid implements MapFunction<CentroidFeature, Centroid> {
-
-        @Override
-        public Centroid map(CentroidFeature value) throws Exception {
-            if (value.getCentroid() == null) {
-                LOGGER.warn("Got null centroid for {} ({})", value, System.identityHashCode(value));
-            }
-            
-            return value.getCentroid();
-        }
-    }
-    
-    @SuppressWarnings("serial")
-    private static class ExtractFeature implements MapFunction<CentroidFeature, Feature> {
-
-        @Override
-        public Feature map(CentroidFeature value) throws Exception {
-            if (value.getFeature() == null) {
-                LOGGER.warn("Got null feature for {})", value);
-            }
-            
-            return value.getFeature();
-        }
-    }
-    
-    @SuppressWarnings("serial")
-    private static class KmeansSelector implements OutputSelector<CentroidFeature> {
-
-        public static final List<String> FEATURE = Arrays.asList("feature");
-        public static final List<String> CENTROID = Arrays.asList("centroid");
-        public static final List<String> RESULT = Arrays.asList("result");
-
-        @Override
-        public Iterable<String> select(CentroidFeature value) {
-            if (value.getCentroid() != null) {
-                if (value.getFeature() != null) {
-                    LOGGER.debug("Returning RESULT for {}", value);
-                    return RESULT;
-                } else {
-                    LOGGER.debug("Returning CENTROID for {}", value);
-                    return CENTROID;
-                }
-            } else if (value.getFeature() != null) {
-                LOGGER.debug("Returning FEATURE for {}", value);
-                return FEATURE;
-            } else {
-                throw new RuntimeException("Invalid case of all fields null");
-            }
-        }
-    }
-    
-    @SuppressWarnings("serial")
-    private static class ClusterFunction extends CoProcessFunction<Centroid, Feature, CentroidFeature> {
+    private static class ClusterFunction extends CoProcessFunction<Centroid, Feature, FeatureResult> {
 
         public static final OutputTag<Centroid> CENTROID_OUTPUT_TAG = new OutputTag<Centroid>("centroid"){};
         public static final OutputTag<Feature> FEATURE_OUTPUT_TAG = new OutputTag<Feature>("feature"){};
@@ -171,7 +127,7 @@ public class KMeansClustering {
         }
 
         @Override
-        public void processElement1(Centroid centroid, Context ctx, Collector<CentroidFeature> out) throws Exception {
+        public void processElement1(Centroid centroid, Context ctx, Collector<FeatureResult> out) throws Exception {
             if (centroid == null) {
                 LOGGER.warn("Null centroid >> Processing ({}/{})", _partition, _parallelism);
                 return;
@@ -217,7 +173,7 @@ public class KMeansClustering {
         }
 
         @Override
-        public void processElement2(Feature feature, Context ctx, Collector<CentroidFeature> out) throws Exception {
+        public void processElement2(Feature feature, Context ctx, Collector<FeatureResult> out) throws Exception {
             if (feature == null) {
                 LOGGER.warn("Null feature >> Processing ({}/{})", _partition, _parallelism);
                 return;
@@ -245,7 +201,7 @@ public class KMeansClustering {
             if (oldCentroidId == newCentroidId) {
                 if (feature.getProcessCount() >= 5) {
                     LOGGER.debug("{} >> stable, removing", feature);
-                    out.collect(new CentroidFeature(bestCentroid, feature));
+                    out.collect(new FeatureResult(feature, bestCentroid));
                 } else {
                     LOGGER.debug("{} >> not stable enough, recycling", feature);
                     Feature updatedFeature = new Feature(feature);
