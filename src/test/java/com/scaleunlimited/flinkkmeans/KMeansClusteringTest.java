@@ -69,7 +69,7 @@ public class KMeansClusteringTest {
         
         env.execute();
         
-        Queue<CentroidFeature> results = InMemorySinkFunction.getValues();
+        Queue<FeatureResult> results = InMemorySinkFunction.getValues();
         
         Map<Integer, Centroid> clusters = createCentroids(points);
         
@@ -78,7 +78,7 @@ public class KMeansClusteringTest {
         
         while (!results.isEmpty()) {
             numResults += 1;
-            CentroidFeature result = results.remove();
+            FeatureResult result = results.remove();
             Centroid c = result.getCentroid();
             Feature f = result.getFeature();
             
@@ -156,7 +156,7 @@ public class KMeansClusteringTest {
         KMeansClustering.build(env, centroidsSource, featuresSource, sink);
         env.execute();
 
-        Queue<CentroidFeature> results = InMemorySinkFunction.getValues();
+        Queue<FeatureResult> results = InMemorySinkFunction.getValues();
         assertEquals(features.size(), results.size());
     }
 
@@ -185,23 +185,23 @@ public class KMeansClusteringTest {
     }
 
     @SuppressWarnings("serial")
-    private static class InMemorySinkFunction extends RichSinkFunction<CentroidFeature> {
+    private static class InMemorySinkFunction extends RichSinkFunction<FeatureResult> {
         
         // Static, so all parallel functions will write to the same queue
-        static private Queue<CentroidFeature> _values = new ConcurrentLinkedQueue<>();
+        static private Queue<FeatureResult> _values = new ConcurrentLinkedQueue<>();
         
         public InMemorySinkFunction() {
             _values.clear();
         }
         
-        public static Queue<CentroidFeature> getValues() {
+        public static Queue<FeatureResult> getValues() {
             return _values;
         }
         
         @Override
-        public void invoke(CentroidFeature value) throws Exception {
+        public void invoke(FeatureResult value) throws Exception {
             LOGGER.debug("Adding {} for {}", value.getFeature(), value.getCentroid());
-            _values.add(new CentroidFeature(value));
+            _values.add(new FeatureResult(value));
         }
     }
 
