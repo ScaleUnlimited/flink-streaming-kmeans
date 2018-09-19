@@ -199,6 +199,7 @@ public class UnionedSources<T0, T1> extends RichParallelSourceFunction<Either<T0
                 sourceId += 1;
                 LOGGER.info("Done with both sources");
             } else if (terminator.isTerminated()) {
+                LOGGER.info("Terminating UnionedSources");
                 isRunning = false;
             } else {
                 Thread.sleep(10L);

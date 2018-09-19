@@ -4,8 +4,10 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Queue;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 
 import javax.servlet.ServletException;
@@ -37,14 +39,14 @@ public class KMeansTool {
     public static void main(String[] args) {
         final LocalStreamEnvironmentWithAsyncExecution env = 
                 new LocalStreamEnvironmentWithAsyncExecution();
-
+        
         List<Centroid> centroids = makeCentroids(NUM_CENTROIDS);
         SourceFunction<Centroid> centroidsSource = new ParallelListSource<Centroid>(centroids);
 
         // Note that we have to limit this to avoid deadlocking
         final int numPoints = NUM_CENTROIDS * 1000;
         List<Feature> features = makeFeatures(centroids, numPoints);
-        SourceFunction<Feature> featuresSource = new ParallelListSource<Feature>(features, 100L);
+        SourceFunction<Feature> featuresSource = new ParallelListSource<Feature>(features, 10L);
         Server server = null;
 
         try {
@@ -60,7 +62,7 @@ public class KMeansTool {
             server = new Server(8080);
             server.setHandler(new FlinkQueryStateHandler(client, stateDescriptor, submission.getJobID()));
             server.start();
-            server.join();
+            // server.join();
             
             while (env.isRunning(submission.getJobID())) {
                 Thread.sleep(1000L);
@@ -81,6 +83,7 @@ public class KMeansTool {
         
     }
 
+    // Remove me
     static final double MIN_LATITUDE = 40.57;
     static final double MAX_LATITUDE = 40.77;
     
@@ -152,18 +155,14 @@ public class KMeansTool {
             out.append("{\n\t\"type\": \"FeatureCollection\",\n");
             out.append("\t\"features\": [");
 
+            Queue<Centroid> centroids = new ConcurrentLinkedQueue<>();
             for (int i = 0; i < NUM_CENTROIDS; i++) {
                 CompletableFuture<ValueState<Centroid>> resultFuture = _client.getKvState(_jobID, "centroids", i,
                         new TypeHint<Integer>() { }, _stateDescriptor);
 
-                final boolean firstCentroid = i == 0;
                 try {
-                    if (!firstCentroid) {
-                        out.append(",\n\t\t");
-                    }
-
                     Centroid c = resultFuture.get().value();
-                    printCentroid(out, c);
+                    centroids.add(c);
                 } catch (ExecutionException e) {
                     // Ignore this error, as it happens when the flow hasn't generated results yet, so
                     // we want to just return an empty result.
@@ -180,6 +179,17 @@ public class KMeansTool {
                 }
             }
 
+            boolean firstCentroid = true;
+            for (Centroid c : centroids) {
+                if (!firstCentroid) {
+                    out.append(",\n\t\t");
+                } else {
+                    firstCentroid = false;
+                }
+
+                printCentroid(out, c);
+            }
+            
             out.append("\n\t]\n");
             out.append("}\n");
             writer.print(out.toString());

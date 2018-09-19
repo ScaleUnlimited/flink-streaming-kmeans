@@ -66,7 +66,7 @@ public class KMeansClustering {
         UnionedSources<Centroid, Feature> source = new UnionedSources<>(type, centroidsSource, featuresSource);
         
         // TODO - pass in terminator to the build() method, as the test code knows what it wants.
-        source.setTerminator(new TimedTerminator(5000L));
+        source.setTerminator(new TimedTerminator(25000L));
         
         // Split the stream into centroids and features, then set up separate iterations for
         // each one. Centroids are broadcast, while features are shuffled.
