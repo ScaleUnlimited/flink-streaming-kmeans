@@ -11,6 +11,7 @@ public class Centroid implements Serializable {
     private int numFeatures;
     
     public Centroid() {
+        // So it's a valid POJO
     }
 
     public Centroid(Centroid c) {

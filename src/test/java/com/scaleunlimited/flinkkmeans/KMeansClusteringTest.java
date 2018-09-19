@@ -12,9 +12,19 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import org.apache.commons.io.FileUtils;
+import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.common.JobSubmissionResult;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.queryablestate.client.QueryableStateClient;
+import org.apache.flink.streaming.api.environment.LocalStreamEnvironmentWithAsyncExecution;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
@@ -139,23 +149,45 @@ public class KMeansClusteringTest {
     }
     
     @Test
-    public void testSyntheticData() throws Exception {
-        final StreamExecutionEnvironment env = 
-                StreamExecutionEnvironment.createLocalEnvironment(2);
+    public void testQueryableState() throws Exception {
+        final LocalStreamEnvironmentWithAsyncExecution env = 
+                new LocalStreamEnvironmentWithAsyncExecution();
 
         final int numCentroids = 2;
         List<Centroid> centroids = makeCentroids(numCentroids);
         SourceFunction<Centroid> centroidsSource = new ParallelListSource<Centroid>(centroids);
 
-        final int numPoints = numCentroids * 100;
+        // Note that we have to limit this to avoid deadlocking
+        final int numPoints = numCentroids * 1000;
         List<Feature> features = makeFeatures(centroids, numPoints);
         SourceFunction<Feature> featuresSource = new ParallelListSource<Feature>(features);
 
         InMemorySinkFunction sink = new InMemorySinkFunction();
         
         KMeansClustering.build(env, centroidsSource, featuresSource, sink);
-        env.execute();
+        JobSubmissionResult submission = env.executeAsync("testQueryableState");
+        QueryableStateClient client = new QueryableStateClient("localhost", 9069);
+        client.setExecutionConfig(new ExecutionConfig());
+        
+        ValueStateDescriptor<Centroid> stateDescriptor =
+                new ValueStateDescriptor<>(
+                  "centroid",
+                  TypeInformation.of(new TypeHint<Centroid>() {}));
 
+        while (env.isRunning(submission.getJobID())) {
+            Thread.sleep(1000L);
+            CompletableFuture<ValueState<Centroid>> resultFuture = client.getKvState(submission.getJobID(), "centroids", 0,
+                    new TypeHint<Integer>() { }, stateDescriptor);
+            resultFuture.thenAccept(response -> {
+                try {
+                    Centroid c = response.value();
+                    System.out.println(c);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            });
+        }
+        
         Queue<FeatureResult> results = InMemorySinkFunction.getValues();
         assertEquals(features.size(), results.size());
     }

@@ -8,6 +8,10 @@ public class FeatureResult implements Serializable {
     private Feature feature;
     private Centroid centroid;
     
+    public FeatureResult() {
+        // So Flink treats it as a POJO
+    }
+    
     public FeatureResult(Feature feature, Centroid centroid) {
         this.centroid = new Centroid(centroid);
         this.feature = new Feature(feature);

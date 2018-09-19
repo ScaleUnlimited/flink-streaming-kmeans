@@ -14,6 +14,7 @@ public class ParallelListSource<T> extends RichSourceFunction<T> {
     private static final Logger LOGGER = LoggerFactory.getLogger(ParallelListSource.class);
 
     private List<T> _elements;
+    private long _interElementDelay = 0;
     
     private transient int _parallelism;
     private transient int _subtaskIndex;
@@ -21,6 +22,11 @@ public class ParallelListSource<T> extends RichSourceFunction<T> {
     
     public ParallelListSource(List<T> elements) {
         _elements = elements;
+    }
+    
+    public ParallelListSource(List<T> elements, long interElementDelay) {
+        _elements = elements;
+        _interElementDelay = interElementDelay;
     }
     
     @Override
@@ -44,6 +50,10 @@ public class ParallelListSource<T> extends RichSourceFunction<T> {
             if ((index % _parallelism) == _subtaskIndex) {
                 LOGGER.debug("Emitting {} at index {} for subtask {}", element.toString(), index, _subtaskIndex);
                 ctx.collect(element);
+                
+                if (_interElementDelay > 0) {
+                    Thread.sleep(_interElementDelay);
+                }
             }
             
             index += 1;

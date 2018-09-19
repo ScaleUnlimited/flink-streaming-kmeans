@@ -1,6 +1,5 @@
 package com.scaleunlimited.flinkkmeans;
 
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -10,7 +9,6 @@ import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.IterativeStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.datastream.SplitStream;
@@ -101,9 +99,12 @@ public class KMeansClustering {
         // Output resulting features (with each one's current centroid)
         clustered.addSink(sink)
             .name("results");
+        
+        // Also make the resulting clusters queryable...
+        clustered.map(result -> result.getCentroid())
+            .keyBy(centroid -> centroid.getId())
+            .asQueryableState("centroids");
     }
-    
-
     
     @SuppressWarnings("serial")
     private static class ClusterFunction extends CoProcessFunction<Centroid, Feature, FeatureResult> {
