@@ -2,6 +2,7 @@ package com.scaleunlimited.flinkkmeans;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
@@ -14,6 +15,7 @@ import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import org.apache.commons.io.IOUtils;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobSubmissionResult;
@@ -25,9 +27,12 @@ import org.apache.flink.queryablestate.client.QueryableStateClient;
 import org.apache.flink.streaming.api.environment.LocalStreamEnvironmentWithAsyncExecution;
 import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
+import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.handler.AbstractHandler;
+import org.eclipse.jetty.server.handler.ContextHandler;
+import org.eclipse.jetty.server.handler.ContextHandlerCollection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -60,7 +65,16 @@ public class KMeansTool {
 
             // Set up Jetty server
             server = new Server(8080);
-            server.setHandler(new FlinkQueryStateHandler(client, stateDescriptor, submission.getJobID()));
+            ContextHandler contextFeatures = new ContextHandler("/features");
+            contextFeatures.setHandler(new FlinkQueryStateHandler(client, stateDescriptor, submission.getJobID()));
+
+            ContextHandler contextMap = new ContextHandler("/map");
+            contextMap.setHandler(new MapRequestHandler());
+
+            ContextHandlerCollection contexts = new ContextHandlerCollection();
+            contexts.setHandlers(new Handler[] { contextFeatures, contextMap });
+
+            server.setHandler(contexts);
             server.start();
             // server.join();
             
@@ -148,6 +162,7 @@ public class KMeansTool {
         public void handle(String target, Request baseRequest,
                 HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
             response.setContentType("application/json; charset=utf-8");
+//            response.setHeader("Access-Control-Allow-Origin", "*");
             response.setStatus(HttpServletResponse.SC_OK);
 
             PrintWriter writer = response.getWriter();
@@ -207,6 +222,19 @@ public class KMeansTool {
             out.append(String.format("\t\t\t\t\"coordinates\": [%f, %f]\n", longitude, latitude));
             out.append("\t\t\t}\n");
             out.append("\t\t}");
+        }
+    }
+
+    private static class MapRequestHandler extends AbstractHandler {
+
+        @Override
+        public void handle(String target, Request baseRequest,
+                HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
+            response.setContentType("text/html; charset=utf-8");
+            response.setStatus(HttpServletResponse.SC_OK);
+            PrintWriter writer = response.getWriter();
+            writer.print(IOUtils.toString(KMeansTool.class.getResourceAsStream("/nyc-bike-share.html"), StandardCharsets.UTF_8.name()));
+            baseRequest.setHandled(true);
         }
     }
 }

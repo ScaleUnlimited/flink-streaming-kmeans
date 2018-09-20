@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8' />
+    <title>Display a map</title>
+    <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no' />
+    <script src='https://api.tiles.mapbox.com/mapbox-gl-js/v0.48.0/mapbox-gl.js'></script>
+    <link href='https://api.tiles.mapbox.com/mapbox-gl-js/v0.48.0/mapbox-gl.css' rel='stylesheet' />
+    <style>
+        body { margin:0; padding:0; }
+        #map { position:absolute; top:0; bottom:0; width:100%; }
+    </style>
+</head>
+<body>
+
+<div id='map'></div>
+<script>
+mapboxgl.accessToken = 'pk.eyJ1Ijoia2tydWdsZXIiLCJhIjoiY2psenFwYjZiMDM3ZjNwcG5iaTZ3Zm15eCJ9.ceAB77_qe6RvIcN0zFpXPg';
+var map = new mapboxgl.Map({
+    container: 'map', // container id
+    style: 'mapbox://styles/mapbox/streets-v9', // stylesheet location
+    center: [-73.935242, 40.730610], // starting position [lng, lat]
+    zoom: 12 // starting zoom
+});
+
+
+
+function getPoints(delta) {
+    
+    xhttp = new XMLHttpRequest()
+	xhttp.open("GET", "http://localhost:8080/features", false);
+	xhttp.send();
+	return xhttp.responseText;
+    
+}
+
+map.on('load', function () {
+    // Add a source and layer displaying the centroids that will be animated.
+    map.addSource('flinkcentroids', {
+        "type": "geojson",
+        "data": getPoints(0)
+    });
+
+    map.addLayer({
+        "id": "centroids",
+        "source": "flinkcentroids",
+        "type": "circle",
+        "paint": {
+            "circle-radius": 8,
+            "circle-opacity": 0.6,
+            "circle-color": "#B42222"
+        },
+        "filter": ["==", "$type", "Point"]
+    });
+
+	var delta = 0;
+	var offset = 0.001;
+	function animateMarker() {
+        // Update the data to a new position .
+        
+        if (delta > 0 && delta > 0.01) {
+        	delta = 0;
+        	offset = -offset;
+        } else if (delta < 0 && delta < 0.01) {
+        	delta = 0;
+        	offset = -offset;
+        }
+		delta += offset;
+
+        map.getSource('flinkcentroids').setData(getPoints(delta));
+
+    }
+
+   // Update the centroids every 2 seconds.
+   var timer = window.setInterval(animateMarker, 2000);
+});
+
+
+</script>
+
+</body>
+</html>
