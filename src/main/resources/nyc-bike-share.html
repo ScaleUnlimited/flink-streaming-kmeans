@@ -20,17 +20,18 @@ var map = new mapboxgl.Map({
     container: 'map', // container id
     style: 'mapbox://styles/mapbox/streets-v9', // stylesheet location
     center: [-73.935242, 40.730610], // starting position [lng, lat]
-    zoom: 12 // starting zoom
+    zoom: 10 // starting zoom
 });
 
 
 
-function getPoints(delta) {
+function getPoints() {
     
     xhttp = new XMLHttpRequest()
 	xhttp.open("GET", "http://localhost:8080/features", false);
 	xhttp.send();
-	return xhttp.responseText;
+	console.log(xhttp.responseText);
+	return JSON.parse(xhttp.responseText)
     
 }
 
@@ -38,7 +39,7 @@ map.on('load', function () {
     // Add a source and layer displaying the centroids that will be animated.
     map.addSource('flinkcentroids', {
         "type": "geojson",
-        "data": getPoints(0)
+        "data": getPoints()
     });
 
     map.addLayer({
@@ -53,21 +54,9 @@ map.on('load', function () {
         "filter": ["==", "$type", "Point"]
     });
 
-	var delta = 0;
-	var offset = 0.001;
 	function animateMarker() {
         // Update the data to a new position .
-        
-        if (delta > 0 && delta > 0.01) {
-        	delta = 0;
-        	offset = -offset;
-        } else if (delta < 0 && delta < 0.01) {
-        	delta = 0;
-        	offset = -offset;
-        }
-		delta += offset;
-
-        map.getSource('flinkcentroids').setData(getPoints(delta));
+        map.getSource('flinkcentroids').setData(getPoints());
 
     }
 

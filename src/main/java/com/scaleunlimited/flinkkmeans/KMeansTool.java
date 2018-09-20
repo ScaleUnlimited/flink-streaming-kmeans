@@ -227,13 +227,19 @@ public class KMeansTool {
 
     private static class MapRequestHandler extends AbstractHandler {
 
+        String _mapFile;
+        
         @Override
         public void handle(String target, Request baseRequest,
                 HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
             response.setContentType("text/html; charset=utf-8");
             response.setStatus(HttpServletResponse.SC_OK);
+            if (_mapFile == null) {
+                _mapFile = IOUtils.toString(KMeansTool.class.getResourceAsStream("/nyc-bike-share.html"), StandardCharsets.UTF_8.name());
+            }
             PrintWriter writer = response.getWriter();
-            writer.print(IOUtils.toString(KMeansTool.class.getResourceAsStream("/nyc-bike-share.html"), StandardCharsets.UTF_8.name()));
+            
+            writer.print(_mapFile);
             baseRequest.setHandled(true);
         }
     }
