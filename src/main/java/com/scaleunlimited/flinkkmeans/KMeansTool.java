@@ -33,8 +33,12 @@ import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.handler.AbstractHandler;
 import org.eclipse.jetty.server.handler.ContextHandler;
 import org.eclipse.jetty.server.handler.ContextHandlerCollection;
+import org.kohsuke.args4j.CmdLineException;
+import org.kohsuke.args4j.CmdLineParser;
+import org.kohsuke.args4j.Option;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 
 public class KMeansTool {
     private static final Logger LOGGER = LoggerFactory.getLogger(KMeansTool.class);
@@ -45,6 +49,16 @@ public class KMeansTool {
         final LocalStreamEnvironmentWithAsyncExecution env = 
                 new LocalStreamEnvironmentWithAsyncExecution();
         
+        KMeansToolOptions options = new KMeansToolOptions();
+        CmdLineParser parser = new CmdLineParser(options);
+
+        try {
+            parser.parseArgument(args);
+        } catch (CmdLineException e) {
+            System.err.println(e.getMessage());
+            printUsageAndExit(parser);
+        }
+
         List<Centroid> centroids = makeCentroids(NUM_CENTROIDS);
         SourceFunction<Centroid> centroidsSource = new ParallelListSource<Centroid>(centroids);
 
@@ -69,7 +83,7 @@ public class KMeansTool {
             contextFeatures.setHandler(new FlinkQueryStateHandler(client, stateDescriptor, submission.getJobID()));
 
             ContextHandler contextMap = new ContextHandler("/map");
-            contextMap.setHandler(new MapRequestHandler());
+            contextMap.setHandler(new MapRequestHandler(options.getAccessToken()));
 
             ContextHandlerCollection contexts = new ContextHandlerCollection();
             contexts.setHandlers(new Handler[] { contextFeatures, contextMap });
@@ -142,6 +156,25 @@ public class KMeansTool {
         return result;
     }
 
+
+    private static void printUsageAndExit(CmdLineParser parser) {
+        parser.printUsage(System.err);
+        System.exit(-1);
+    }
+
+    private static class KMeansToolOptions {
+
+        private String _accessToken;
+
+        @Option(name = "-accesstoken", usage = "Mapbox API access token", required = true)
+        public void setAccessToken(String accessToken) {
+            _accessToken = accessToken;
+        }
+
+        public String getAccessToken() {
+            return _accessToken;
+        }
+    }
 
     private static class FlinkQueryStateHandler extends AbstractHandler {
 
@@ -227,7 +260,13 @@ public class KMeansTool {
 
     private static class MapRequestHandler extends AbstractHandler {
 
-        String _mapFile;
+        private static String ACCESS_TOKEN_TO_REPLACE = "__MAPBOX_ACCESS_TOKEN__";
+        private String _mapFile;
+        private String _accessToken;
+        
+        public MapRequestHandler(String accessToken) {
+            _accessToken = accessToken;
+        }
         
         @Override
         public void handle(String target, Request baseRequest,
@@ -235,10 +274,10 @@ public class KMeansTool {
             response.setContentType("text/html; charset=utf-8");
             response.setStatus(HttpServletResponse.SC_OK);
             if (_mapFile == null) {
-                _mapFile = IOUtils.toString(KMeansTool.class.getResourceAsStream("/nyc-bike-share.html"), StandardCharsets.UTF_8.name());
+                String fileStr = IOUtils.toString(KMeansTool.class.getResourceAsStream("/nyc-bike-share.html"), StandardCharsets.UTF_8.name());
+                _mapFile = fileStr.replace(ACCESS_TOKEN_TO_REPLACE, _accessToken);
             }
             PrintWriter writer = response.getWriter();
-            
             writer.print(_mapFile);
             baseRequest.setHandled(true);
         }
