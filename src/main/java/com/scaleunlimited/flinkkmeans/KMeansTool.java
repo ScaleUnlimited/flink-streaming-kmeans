@@ -22,7 +22,6 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 import org.apache.commons.io.IOUtils;
-import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobSubmissionResult;
 import org.apache.flink.api.common.state.ValueState;
@@ -30,20 +29,23 @@ import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.time.Deadline;
 import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.configuration.QueryableStateOptions;
 import org.apache.flink.queryablestate.client.QueryableStateClient;
 import org.apache.flink.queryablestate.exceptions.UnknownKeyOrNamespaceException;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
+import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.handler.AbstractHandler;
+import org.eclipse.jetty.server.handler.ContextHandler;
+import org.eclipse.jetty.server.handler.ContextHandlerCollection;
 import org.kohsuke.args4j.CmdLineException;
 import org.kohsuke.args4j.CmdLineParser;
 import org.kohsuke.args4j.Option;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 
 public class KMeansTool {
     private static final Logger LOGGER = LoggerFactory.getLogger(KMeansTool.class);
@@ -52,11 +54,6 @@ public class KMeansTool {
     
     private static KMeansMiniCluster _localCluster;
     
-    private static void printUsageAndExit(CmdLineParser parser) {
-        parser.printUsage(System.err);
-        System.exit(-1);
-    }
-
     public static void main(String[] args) {
         
         KMeansToolOptions options = new KMeansToolOptions();
@@ -110,8 +107,17 @@ public class KMeansTool {
             server = new Server(8085);
             // We assume the tool is running on the same server, but if we're not in local mode, then
             // we need to create a QueryableStateClient
-            server.setHandler(new FlinkQueryStateHandler(_localCluster.getQueryableStateClient(),
+            ContextHandler contextFeatures = new ContextHandler("/features");
+            contextFeatures.setHandler(new FlinkQueryStateHandler(_localCluster.getQueryableStateClient(),
                     stateDescriptor, submission.getJobID(), options.getNumClusters()));
+
+            ContextHandler contextMap = new ContextHandler("/map");
+            contextMap.setHandler(new MapRequestHandler(options.getAccessToken()));
+
+            ContextHandlerCollection contexts = new ContextHandlerCollection();
+            contexts.setHandlers(new Handler[] { contextFeatures, contextMap });
+
+            server.setHandler(contexts);
             server.start();
             
             while (_localCluster.isRunning()) {
@@ -189,7 +195,13 @@ public class KMeansTool {
             centroids.add(centroid);
         }
     }
-    
+
+
+    private static void printUsageAndExit(CmdLineParser parser) {
+        parser.printUsage(System.err);
+        System.exit(-1);
+    }
+
     private static class FlinkQueryStateHandler extends AbstractHandler {
 
         private QueryableStateClient _client;
@@ -280,12 +292,47 @@ public class KMeansTool {
         }
     }
     
+    private static class MapRequestHandler extends AbstractHandler {
+
+        private static String ACCESS_TOKEN_TO_REPLACE = "__MAPBOX_ACCESS_TOKEN__";
+        private String _mapFile;
+        private String _accessToken;
+        
+        public MapRequestHandler(String accessToken) {
+            _accessToken = accessToken;
+        }
+        
+        @Override
+        public void handle(String target, Request baseRequest,
+                HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
+            response.setContentType("text/html; charset=utf-8");
+            response.setStatus(HttpServletResponse.SC_OK);
+            if (_mapFile == null) {
+                String fileStr = IOUtils.toString(KMeansTool.class.getResourceAsStream("/nyc-bike-share.html"), StandardCharsets.UTF_8.name());
+                _mapFile = fileStr.replace(ACCESS_TOKEN_TO_REPLACE, _accessToken);
+            }
+            PrintWriter writer = response.getWriter();
+            writer.print(_mapFile);
+            baseRequest.setHandled(true);
+        }
+    }
+
     public static class KMeansToolOptions {
+        private String _accessToken;
         private boolean _local = false;
         private String _input;
         private int _parallelism = 2;
         private int _numClusters = 10;
         
+        @Option(name = "-accesstoken", usage = "MapBox access token", required = true)
+        public void setAccessToken(String accessToken) {
+            _accessToken = accessToken;
+        }
+        
+        public String getAccessToken() {
+            return _accessToken;
+        }
+
         @Option(name = "-local", usage = "run a local minicluster", required = false)
         public void setLocal(boolean local) {
             _local = local;
@@ -321,7 +368,6 @@ public class KMeansTool {
         public int getNumClusters() {
             return _numClusters;
         }
-
-
     }
+
 }
