@@ -207,7 +207,7 @@ public class KMeansClustering {
                     LOGGER.debug("{} >> not stable enough, recycling", feature);
                     Feature updatedFeature = new Feature(feature);
                     updatedFeature.incProcessCount();
-                    ctx.output(FEATURE_OUTPUT_TAG, new Feature(updatedFeature));
+                    ctx.output(FEATURE_OUTPUT_TAG, updatedFeature);
                 }
             } else {
                 Feature updatedFeature = new Feature(feature);

@@ -4,7 +4,12 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 
 import java.io.File;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -16,15 +21,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
 import org.apache.flink.api.common.ExecutionConfig;
-import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobSubmissionResult;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.time.Deadline;
 import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.queryablestate.client.QueryableStateClient;
-import org.apache.flink.streaming.api.environment.LocalStreamEnvironmentWithAsyncExecution;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
@@ -35,6 +40,42 @@ import org.slf4j.LoggerFactory;
 public class KMeansClusteringTest {
     private static final Logger LOGGER = LoggerFactory.getLogger(KMeansClusteringTest.class);
 
+    @Test
+    public void testCitiBike() throws Exception {
+        List<Feature> features = new ArrayList<>();
+        List<Centroid> centroids = new ArrayList<>();
+        try (InputStream is = KMeansClusteringTest.class.getResourceAsStream("/citibike-20180801-min.tsv")) {
+            KMeansTool.makeFeaturesAndCentroids(is, features, centroids, 10);
+        } catch (Exception e) {
+            fail(e.getMessage());
+        }
+        
+        SourceFunction<Feature> featuresSource = new ParallelListSource<Feature>(features, 10L);
+        SourceFunction<Centroid> centroidsSource = new ParallelListSource<Centroid>(centroids);
+
+        InMemorySinkFunction sink = new InMemorySinkFunction();
+        
+        final StreamExecutionEnvironment env =
+                StreamExecutionEnvironment.createLocalEnvironment(2);
+        KMeansClustering.build(env, centroidsSource, featuresSource, sink);
+        
+        env.execute();
+        
+        Queue<FeatureResult> results = InMemorySinkFunction.getValues();
+        
+        int numResults = 0;
+        while (!results.isEmpty()) {
+            numResults += 1;
+            FeatureResult result = results.remove();
+            Centroid c = result.getCentroid();
+            Feature f = result.getFeature();
+            
+            LOGGER.debug("Feature {} at {},{} assigned to centroid {} at {},{}", 
+                    f.getId(), f.getX(), f.getY(),
+                    c.getId(), c.getFeature().getX(), c.getFeature().getY());
+        }
+    }
+    
     @Test
     public void test() throws Exception {
         final StreamExecutionEnvironment env =
@@ -150,8 +191,10 @@ public class KMeansClusteringTest {
     
     @Test
     public void testQueryableState() throws Exception {
-        final LocalStreamEnvironmentWithAsyncExecution env = 
-                new LocalStreamEnvironmentWithAsyncExecution();
+        KMeansMiniCluster localCluster = new KMeansMiniCluster();
+        final StreamExecutionEnvironment env =
+                StreamExecutionEnvironment.createLocalEnvironment(2);
+        env.setMaxParallelism(localCluster.getMaxParallelism());
 
         final int numCentroids = 2;
         List<Centroid> centroids = makeCentroids(numCentroids);
@@ -165,7 +208,11 @@ public class KMeansClusteringTest {
         InMemorySinkFunction sink = new InMemorySinkFunction();
         
         KMeansClustering.build(env, centroidsSource, featuresSource, sink);
-        JobSubmissionResult submission = env.executeAsync("testQueryableState");
+        
+        final Duration TEST_TIMEOUT = Duration.ofSeconds(10);
+        final Deadline deadline = Deadline.now().plus(TEST_TIMEOUT);
+        JobSubmissionResult submission = localCluster.start(deadline, env);
+
         QueryableStateClient client = new QueryableStateClient("localhost", 9069);
         client.setExecutionConfig(new ExecutionConfig());
         
@@ -174,7 +221,7 @@ public class KMeansClusteringTest {
                   "centroid",
                   TypeInformation.of(new TypeHint<Centroid>() {}));
 
-        while (env.isRunning(submission.getJobID())) {
+        while (localCluster.isRunning()) {
             Thread.sleep(1000L);
             CompletableFuture<ValueState<Centroid>> resultFuture = client.getKvState(submission.getJobID(), "centroids", 0,
                     new TypeHint<Integer>() { }, stateDescriptor);
