@@ -5,14 +5,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
 import java.util.Queue;
-import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
@@ -78,30 +73,29 @@ public class KMeansTool {
             env = StreamExecutionEnvironment.createRemoteEnvironment("localhost", 80, options.getParallelism());
         }
         
-        List<Feature> features = new ArrayList<>();
-        List<Centroid> centroids = new ArrayList<>();
+        List<Feature> features = null;
         try (InputStream is = new FileInputStream(options.getInput())) {
-            makeFeaturesAndCentroids(is, features, centroids, options.getNumClusters());
+            features = KMeansUtils.makeFeatures(is);
         } catch (Exception e) {
             System.err.println("Exception loading features: " + e.getMessage());
             System.exit(-1);
         }
         
-        SourceFunction<Centroid> centroidsSource = new ParallelListSource<Centroid>(centroids);
         // TODO fix up streaming code so no delay is needed (optional, to slow down processing only)
         SourceFunction<Feature> featuresSource = new ParallelListSource<Feature>(features, 10L);
         Server server = null;
         
         try {
-            KMeansClustering.build(env, centroidsSource, featuresSource, new DiscardingSink<>());
+            double maxDistance = KMeansUtils.calcMaxDistance(features, options.getNumClusters());
+            KMeansClustering.build(env, featuresSource, new DiscardingSink<>(), options.getNumClusters(), maxDistance);
             
             // TODO handle remote case, with no local cluster
             // TODO do we actually neeed a timeout in local mode?
             JobSubmissionResult submission = _localCluster.start(Deadline.now().plus(TOOL_TIMEOUT), env);
             LOGGER.info("Starting job with id " + submission.getJobID());
             
-            ValueStateDescriptor<Centroid> stateDescriptor = new ValueStateDescriptor<>("centroid",
-                    TypeInformation.of(new TypeHint<Centroid>() {}));
+            ValueStateDescriptor<Feature> stateDescriptor = new ValueStateDescriptor<>("centroid",
+                    TypeInformation.of(new TypeHint<Feature>() {}));
 
             // Set up Jetty server
             server = new Server(8085);
@@ -147,56 +141,6 @@ public class KMeansTool {
         
     }
 
-    public static void makeFeaturesAndCentroids(InputStream is, List<Feature> features,
-            List<Centroid> centroids, int numCentroids) throws ParseException, IOException {
-        
-        // Get data, in <date time><tab><lat><tab><lon> format.
-        // 2018-08-01 00:00:07.3210 40.78339981 -73.98093133
-        List<String> rides = IOUtils.readLines(is, StandardCharsets.UTF_8);
-        
-        SimpleDateFormat parser = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSSS");
-        
-        int rideID = 0;
-        double minLat = 180.0;
-        double maxLat = -180.0;
-        double minLon = 180.00;
-        double maxLon = -180.00;
-        
-        for (String ride : rides) {
-            String[] fields = ride.split("\t", 3);
-            // TODO save time for generating watermark
-            Date startTime = parser.parse(fields[0]);
-            double lat = Double.parseDouble(fields[1]);
-            double lon = Double.parseDouble(fields[2]);
-            
-            minLat = Math.min(lat,  minLat);
-            maxLat = Math.max(lat, maxLat);
-            minLon = Math.min(lon, minLon);
-            maxLon = Math.max(lon, maxLon);
-            
-            Feature f = new Feature(rideID++, lat, lon);
-            features.add(f);
-        }
-
-        Random rand = new Random(System.currentTimeMillis());
-        double latCenter = (minLat + maxLat) / 2.0;
-        double lonCenter = (minLon + maxLon) / 2.0;
-
-        // Start off clusters more in the center
-        double latRange = (maxLat - minLat) / 1.5;
-        double lonRange = (maxLon - minLon) / 1.5;
-        
-        int centroidID = 0;
-        for (int i = 0; i < numCentroids; i++) {
-            Feature f = new Feature(latCenter + ((rand.nextDouble() - 0.5) * latRange),
-                    lonCenter + ((rand.nextDouble() - 0.5) * lonRange));
-
-            Centroid centroid = new Centroid(f, centroidID++, CentroidType.VALUE);
-            centroids.add(centroid);
-        }
-    }
-
-
     private static void printUsageAndExit(CmdLineParser parser) {
         parser.printUsage(System.err);
         System.exit(-1);
@@ -205,12 +149,12 @@ public class KMeansTool {
     private static class FlinkQueryStateHandler extends AbstractHandler {
 
         private QueryableStateClient _client;
-        private ValueStateDescriptor<Centroid> _stateDescriptor;
+        private ValueStateDescriptor<Feature> _stateDescriptor;
         private JobID _jobID;
         private int _numClusters;
         
         public FlinkQueryStateHandler(QueryableStateClient client,
-                ValueStateDescriptor<Centroid> stateDescriptor, JobID jobID,
+                ValueStateDescriptor<Feature> stateDescriptor, JobID jobID,
                 int numClusters) {
             super();
             
@@ -232,21 +176,21 @@ public class KMeansTool {
             out.append("{\n\t\"type\": \"FeatureCollection\",\n");
             out.append("\t\"features\": [");
 
-            Queue<Centroid> centroids = new ConcurrentLinkedQueue<>();
+            Queue<Feature> centroids = new ConcurrentLinkedQueue<>();
             for (int i = 0; i < _numClusters; i++) {
-                CompletableFuture<ValueState<Centroid>> resultFuture = _client.getKvState(_jobID, "centroids", i,
+                CompletableFuture<ValueState<Feature>> resultFuture = _client.getKvState(_jobID, "centroids", i,
                         new TypeHint<Integer>() { }, _stateDescriptor);
 
                 try {
-                    Centroid c = resultFuture.get().value();
-                    centroids.add(c);
+                    Feature centroid = resultFuture.get().value();
+                    centroids.add(centroid);
                 } catch (ExecutionException e) {
                     if (e.getCause() instanceof UnknownKeyOrNamespaceException) {
                         // Ignore this error, as it happens when the flow hasn't generated results yet, so
                         // we want to just return an empty result.
-                        LOGGER.debug("Can't get results yet for centroid {}", i);
+                        LOGGER.debug("Can't get results yet for cluster {}", i);
                     } else {
-                        LOGGER.error("Error getting centroid data: " + e.getMessage(), e);
+                        LOGGER.error("Error getting cluster data: " + e.getMessage(), e);
                     }
                     
                     break;
@@ -261,15 +205,15 @@ public class KMeansTool {
                 }
             }
 
-            boolean firstCentroid = true;
-            for (Centroid c : centroids) {
-                if (!firstCentroid) {
+            boolean firstCluster = true;
+            for (Feature centroid : centroids) {
+                if (!firstCluster) {
                     out.append(",\n\t\t");
                 } else {
-                    firstCentroid = false;
+                    firstCluster = false;
                 }
 
-                printCentroid(out, c);
+                printClusterCentroid(out, centroid);
             }
             
             out.append("\n\t]\n");
@@ -278,9 +222,9 @@ public class KMeansTool {
             baseRequest.setHandled(true);
         }
 
-        private void printCentroid(StringBuilder out, Centroid c) {
-            double longitude = c.getFeature().getX();
-            double latitude = c.getFeature().getY();
+        private void printClusterCentroid(StringBuilder out, Feature centroid) {
+            double longitude = centroid.getX();
+            double latitude = centroid.getY();
             
             out.append("{\n");
             out.append("\t\t\t\"type\": \"Feature\",\n");

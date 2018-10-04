@@ -4,13 +4,13 @@ import java.util.Iterator;
 import java.util.List;
 
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.streaming.api.functions.source.RichSourceFunction;
+import org.apache.flink.streaming.api.functions.source.RichParallelSourceFunction;
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @SuppressWarnings("serial")
-public class ParallelListSource<T> extends RichSourceFunction<T> {
+public class ParallelListSource<T> extends RichParallelSourceFunction<T> {
     private static final Logger LOGGER = LoggerFactory.getLogger(ParallelListSource.class);
 
     private List<T> _elements;

@@ -28,7 +28,7 @@ var map = new mapboxgl.Map({
 function getPoints() {
     
     xhttp = new XMLHttpRequest()
-	xhttp.open("GET", "http://localhost:8080/features", false);
+	xhttp.open("GET", "http://localhost:8085/features/", false);
 	xhttp.send();
 	console.log(xhttp.responseText);
 	return JSON.parse(xhttp.responseText)
@@ -60,8 +60,8 @@ map.on('load', function () {
 
     }
 
-   // Update the centroids every 2 seconds.
-   var timer = window.setInterval(animateMarker, 2000);
+   // Update the centroids every 0.5 seconds.
+   var timer = window.setInterval(animateMarker, 500);
 });
 
 

@@ -4,34 +4,44 @@ import java.io.Serializable;
 
 @SuppressWarnings("serial")
 public class Feature implements Serializable {
+    
+    // Special ID for a feature that we construct ourselves, vs. coming
+    // from data where we have (or can assign) a unique id.
+    public static final int NO_FEATURE_ID = -1;
+    
     private int id;
     private double x;
     private double y;
-    private int centroidId;
+    private int clusterId;
     private int processCount;
     
     public Feature() {
-        this(-1, 0, 0);
+        this(0, 0);
     }
 
     public Feature(double x, double y) {
-        this(-1, x, y, -1);
+        this(NO_FEATURE_ID, x, y, Cluster.NO_CLUSTER_ID);
     }
 
     public Feature(int id, double x, double y) {
-        this(id, x, y, -1);
+        this(id, x, y, Cluster.NO_CLUSTER_ID);
     }
 
-    public Feature(int id, double x, double y, int centroidId) {
+    public Feature(int id, double x, double y, int clusterId) {
         this.id = id;
         this.x = x;
         this.y = y;
-        this.centroidId = centroidId;
+        this.clusterId = clusterId;
         this.processCount = 0;
     }
 
     public Feature(Feature p) {
-        this(p.getId(), p.getX(), p.getY(), p.getCentroidId());
+        this(p.getId(), p.getX(), p.getY(), p.getClusterId());
+        this.processCount = p.processCount;
+    }
+
+    public Feature(Feature p, int scalar) {
+        this(p.getId(), p.getX() / scalar, p.getY() / scalar, p.getClusterId());
         this.processCount = p.processCount;
     }
 
@@ -59,12 +69,12 @@ public class Feature implements Serializable {
         this.y = y;
     }
     
-    public int getCentroidId() {
-        return centroidId;
+    public int getClusterId() {
+        return clusterId;
     }
 
-    public void setCentroidId(int centroidId) {
-        this.centroidId = centroidId;
+    public void setClusterId(int clusterId) {
+        this.clusterId = clusterId;
     }
     
     public int getProcessCount() {
@@ -80,7 +90,11 @@ public class Feature implements Serializable {
     }
     
     public double distance(Feature feature) {
-        return Math.sqrt(Math.pow(feature.x - x, 2) + Math.pow(feature.y - y, 2));
+        return Math.sqrt(Math.pow(x - feature.x, 2) + Math.pow(y - feature.y, 2));
+    }
+    
+    public double distance(Feature feature, int scalar) {
+        return Math.sqrt(Math.pow(x / scalar - feature.x, 2) + Math.pow(y / scalar - feature.y, 2));
     }
     
     public Feature times(int scalar) {
@@ -109,10 +123,10 @@ public class Feature implements Serializable {
     
     @Override
     public String toString() {
-        if (centroidId != -1) {
-            return String.format("Feature %d: %f,%f (centroid %s, count %d)", id, x, y, centroidId, processCount);
+        if (clusterId != Cluster.NO_CLUSTER_ID) {
+            return String.format("Feature %d: %f,%f (cluster %s, count %d)", id, x, y, clusterId, processCount);
         } else {
-            return String.format("Feature %d: %f,%f (unassigned)", id, x, y);
+            return String.format("Feature %d: %f,%f (unassigned to cluster)", id, x, y);
         }
     }
 }

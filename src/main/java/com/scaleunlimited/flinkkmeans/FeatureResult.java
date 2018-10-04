@@ -6,27 +6,38 @@ import java.io.Serializable;
 public class FeatureResult implements Serializable {
 
     private Feature feature;
-    private Centroid centroid;
+    private int clusterId;
+    private Feature centroid;
     
     public FeatureResult() {
         // So Flink treats it as a POJO
     }
     
-    public FeatureResult(Feature feature, Centroid centroid) {
-        this.centroid = new Centroid(centroid);
+    public FeatureResult(Feature feature, Cluster cluster) {
         this.feature = new Feature(feature);
+        this.clusterId = cluster.getId();
+        this.centroid = new Feature(cluster.getCentroid());
     }
 
     public FeatureResult(FeatureResult cf) {
-        this.centroid = new Centroid(cf.centroid);
         this.feature = new Feature(cf.feature);
+        this.clusterId = cf.clusterId;
+        this.centroid = new Feature(cf.centroid);
     }
     
-    public Centroid getCentroid() {
-        return centroid;
+    public int getClusterId() {
+        return clusterId;
     }
 
-    public void setCentroid(Centroid centroid) {
+    public void setClusterId(int clusterId) {
+        throw new RuntimeException("You can't set the cluster id");
+    }
+    
+    public Feature getCentroid() {
+        return centroid;
+    }
+    
+    public void setCentroid(Feature centroid) {
         throw new RuntimeException("You can't set the centroid");
     }
     
@@ -40,6 +51,6 @@ public class FeatureResult implements Serializable {
     
     @Override
     public String toString() {
-        return String.format("%s | %s", centroid, feature);
+        return String.format("%d (%s) | %s", clusterId, centroid, feature);
     }
 }

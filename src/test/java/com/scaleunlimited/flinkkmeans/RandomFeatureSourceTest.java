@@ -14,23 +14,23 @@ public class RandomFeatureSourceTest {
 
     @Test
     public void test() throws Exception {
-        final int numCentroids = 5;
+        final int numClusters = 5;
         
-        List<Centroid> centroids = new ArrayList<>();
-        for (int i = 0; i < numCentroids; i++) {
+        List<Cluster> clusters = new ArrayList<>();
+        for (int i = 0; i < numClusters; i++) {
             Feature f = new Feature(i * 10, i * 20);
-            centroids.add(new Centroid(f, i, CentroidType.VALUE));
+            clusters.add(new Cluster(i, f));
         }
         
         final int numFeatures = 100;
         final double spread = 5.0;
         
         final double minXValue = -15.0;
-        final double maxXValue = (numCentroids - 1) * 10.0 + 15.0;
+        final double maxXValue = (numClusters - 1) * 10.0 + 15.0;
         final double minYValue = -15.0;
-        final double maxYValue = (numCentroids - 1) * 20.0 + 15.0;
+        final double maxYValue = (numClusters - 1) * 20.0 + 15.0;
 
-        RandomFeatureSource source = new RandomFeatureSource(centroids, numFeatures, spread);
+        RandomFeatureSource source = new RandomFeatureSource(clusters, numFeatures, spread);
         StreamingRuntimeContext ctx = Mockito.mock(StreamingRuntimeContext.class);
         Mockito.when(ctx.getNumberOfParallelSubtasks()).thenReturn(2);
         Mockito.when(ctx.getIndexOfThisSubtask()).thenReturn(1);

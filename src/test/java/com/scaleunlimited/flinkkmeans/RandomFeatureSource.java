@@ -11,7 +11,7 @@ import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 public class RandomFeatureSource extends RichSourceFunction<Feature> {
 
     private int _numFeatures;
-    private List<Centroid> _realCentroids;
+    private List<Cluster> _clusters;
     private double _featureSpread;
     
     private transient int _subtaskFeatures;
@@ -19,8 +19,8 @@ public class RandomFeatureSource extends RichSourceFunction<Feature> {
     
     private transient volatile boolean _keepRunning;
 
-    public RandomFeatureSource(List<Centroid> realCentroids, int numFeatures, double featureSpread) {
-        _realCentroids = realCentroids;
+    public RandomFeatureSource(List<Cluster> clusters, int numFeatures, double featureSpread) {
+        _clusters = clusters;
         _numFeatures = numFeatures;
         _featureSpread = featureSpread;
     }
@@ -66,7 +66,7 @@ public class RandomFeatureSource extends RichSourceFunction<Feature> {
      * @return pseudo-random feature.
      */
     protected Feature makeRandomFeature() {
-        Feature f = _realCentroids.get(_rand.nextInt(_realCentroids.size())).getFeature();
+        Feature f = _clusters.get(_rand.nextInt(_clusters.size())).getCentroid();
         return new Feature(f.getX() + getFeatureDelta(), f.getY() + getFeatureDelta());
     }
 
