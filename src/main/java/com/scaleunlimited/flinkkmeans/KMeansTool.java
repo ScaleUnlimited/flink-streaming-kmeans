@@ -101,15 +101,18 @@ public class KMeansTool {
             server = new Server(8085);
             // We assume the tool is running on the same server, but if we're not in local mode, then
             // we need to create a QueryableStateClient
-            ContextHandler contextFeatures = new ContextHandler("/features");
-            contextFeatures.setHandler(new FlinkQueryStateHandler(_localCluster.getQueryableStateClient(),
+            ContextHandler contextClusters = new ContextHandler("/clusters");
+            contextClusters.setHandler(new ClustersRequestHandler(_localCluster.getQueryableStateClient(),
                     stateDescriptor, submission.getJobID(), options.getNumClusters()));
+
+            ContextHandler contextFeatures = new ContextHandler("/features");
+            contextFeatures.setHandler(new FeaturesRequestHandler());
 
             ContextHandler contextMap = new ContextHandler("/map");
             contextMap.setHandler(new MapRequestHandler(options.getAccessToken()));
 
             ContextHandlerCollection contexts = new ContextHandlerCollection();
-            contexts.setHandlers(new Handler[] { contextFeatures, contextMap });
+            contexts.setHandlers(new Handler[] { contextClusters, contextFeatures, contextMap });
 
             server.setHandler(contexts);
             server.start();
@@ -146,14 +149,14 @@ public class KMeansTool {
         System.exit(-1);
     }
 
-    private static class FlinkQueryStateHandler extends AbstractHandler {
+    private static class ClustersRequestHandler extends AbstractHandler {
 
         private QueryableStateClient _client;
         private ValueStateDescriptor<Feature> _stateDescriptor;
         private JobID _jobID;
         private int _numClusters;
         
-        public FlinkQueryStateHandler(QueryableStateClient client,
+        public ClustersRequestHandler(QueryableStateClient client,
                 ValueStateDescriptor<Feature> stateDescriptor, JobID jobID,
                 int numClusters) {
             super();
@@ -235,7 +238,26 @@ public class KMeansTool {
             out.append("\t\t}");
         }
     }
-    
+
+    private static class FeaturesRequestHandler extends AbstractHandler {
+
+        
+        public FeaturesRequestHandler() {
+        }
+        
+        @Override
+        public void handle(String target, Request baseRequest,
+                HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
+            response.setContentType("text/html; charset=utf-8");
+            response.setStatus(HttpServletResponse.SC_OK);
+            
+
+            PrintWriter writer = response.getWriter();
+            writer.print("/features has not yet been implemented");
+            baseRequest.setHandled(true);
+        }
+    }
+
     private static class MapRequestHandler extends AbstractHandler {
 
         private static String ACCESS_TOKEN_TO_REPLACE = "__MAPBOX_ACCESS_TOKEN__";

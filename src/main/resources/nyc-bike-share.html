@@ -20,7 +20,7 @@ var map = new mapboxgl.Map({
     container: 'map', // container id
     style: 'mapbox://styles/mapbox/streets-v9', // stylesheet location
     center: [-73.935242, 40.730610], // starting position [lng, lat]
-    zoom: 10 // starting zoom
+    zoom: 11.5 // starting zoom
 });
 
 
@@ -28,7 +28,7 @@ var map = new mapboxgl.Map({
 function getPoints() {
     
     xhttp = new XMLHttpRequest()
-	xhttp.open("GET", "http://localhost:8085/features/", false);
+	xhttp.open("GET", "http://localhost:8085/clusters/", false);
 	xhttp.send();
 	console.log(xhttp.responseText);
 	return JSON.parse(xhttp.responseText)
@@ -47,9 +47,9 @@ map.on('load', function () {
         "source": "flinkcentroids",
         "type": "circle",
         "paint": {
-            "circle-radius": 8,
+            "circle-radius": 20,
             "circle-opacity": 0.6,
-            "circle-color": "#B42222"
+            "circle-color": "#FF0000"
         },
         "filter": ["==", "$type", "Point"]
     });
