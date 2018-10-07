@@ -1,31 +1,22 @@
 package com.scaleunlimited.flinkkmeans;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import org.apache.flink.api.common.functions.RuntimeContext;
-import org.apache.flink.api.common.typeinfo.TypeHint;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.IterativeStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
-import org.apache.flink.streaming.api.datastream.SplitStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.CoProcessFunction;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
-import org.apache.flink.types.Either;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.scaleunlimited.flinksources.SourceTerminator;
-import com.scaleunlimited.flinksources.TimedTerminator;
-import com.scaleunlimited.flinksources.UnionedSources;
 
 /**
  * Cluster points via K-Means clustering. The algorithm is:
@@ -127,25 +118,52 @@ public class KMeansClustering {
             RuntimeContext context = getRuntimeContext();
             _parallelism = context.getNumberOfParallelSubtasks();
             _partition = context.getIndexOfThisSubtask() + 1;
+            
+            // Figure out whether we have a valid starting set of clusters.
+            int numUsed = 0;
+            int numUnused = 0;
+            for (Cluster c : clusters.values()) {
+                if (c.isUnused()) {
+                    numUnused++;
+                } else {
+                    numUsed++;
+                }
+            }
+            
+            if (numUsed + numUnused == 0) {
+                throw new IllegalStateException("Must have at least one seed cluster");
+            } else if ((numUsed != 0) && (numUnused != 0)) {
+                throw new IllegalStateException("Seed clusters must be either all used or all unused");
+            } else if ((numUnused > 0) && (numUnused < _parallelism)) {
+                // We need to have at least as many clusters as we have operators, so that we
+                // can put a feature into an unused cluster that our operator instance "owns".
+                throw new IllegalStateException("Number of unused seed clusters must be >= parallelism");
+            }
         }
 
         @Override
         public void processElement1(ClusterUpdate clusterUpdate, Context ctx, Collector<FeatureResult> out) throws Exception {
             LOGGER.debug("{} >> Processing cluster update ({}/{})", clusterUpdate, _partition, _parallelism);
-            
+
             // Cluster update has a feature, moving from one cluster (might be no cluster, for new feature) to another
             // cluster (might be no cluster, for a stable/emitted feature).
             int fromCluster = clusterUpdate.getFromClusterId();
             int toCluster = clusterUpdate.getToClusterId();
-            
+            Feature feature = clusterUpdate.getFeature();
+
             if (fromCluster != Cluster.NO_CLUSTER_ID) {
                 Cluster c = clusters.get(fromCluster);
-                c.removeFeature(clusterUpdate.getFeature());
+                c.removeFeature(feature);
             }
-            
+
             if (toCluster != Cluster.NO_CLUSTER_ID) {
-                Cluster c = clusters.get(toCluster);
-                c.addFeature(clusterUpdate.getFeature());
+                if (isMyCluster(toCluster) && clusterUpdate.isNewCluster()) {
+                    // Ignore an update to a cluster that we did an immediate
+                    // update for in processElement2
+                } else {
+                    Cluster c = clusters.get(toCluster);
+                    c.addFeature(feature);
+                }
             }
         }
 
@@ -153,57 +171,58 @@ public class KMeansClustering {
         public void processElement2(Feature feature, Context ctx, Collector<FeatureResult> out) throws Exception {
             LOGGER.debug("{} >> Processing feature ({}/{})", feature, _partition, _parallelism);
 
+            // Find the best (closest) cluster. We assume we have at least as many clusters as
+            // we have parallel operators, as otherwise we won't be able to find one of "our"
+            // clusters that's unused, when we first start out with all unused clusters.
             double minDistance = Double.MAX_VALUE;
-            double curDistance = Double.MAX_VALUE;
             Cluster bestCluster = null;
             Cluster unusedCluster = null;
             for (Cluster cluster : clusters.values()) {
-                double distance = cluster.distance(feature);
-                
-                if (feature.getClusterId() == cluster.getId()) {
-                    curDistance = distance;
-                }
-                
-                if ((distance == Cluster.UNUSED_DISTANCE) && isMyCluster(cluster)) {
-                    unusedCluster = cluster;
-                }
-
-                if (distance <= minDistance) {
-                    minDistance = distance;
-                    bestCluster = cluster;
+                if (cluster.isUnused()) {
+                    if (isMyCluster(cluster.getId())) {
+                        unusedCluster = cluster;
+                    } else {
+                        // Ignore unused clusters that don't "belong" to our
+                        // operator instance, as these will be assigned by
+                        // other operator instances.
+                    }
+                } else {
+                    double distance = cluster.distance(feature);
+                    if (distance <= minDistance) {
+                        minDistance = distance;
+                        bestCluster = cluster;
+                    }
                 }
             }
 
             // Special case handling of when the feature is far away from the best
             // (closest) cluster, and we have an unused cluster that we can immediately
-            // use.
+            // use because it's "our" cluster. We want to do this immediate update so
+            // that we don't get a bunch of features all trying to grab the same unused
+            // cluster before it gets updated via the ClusterUpdate iteration.
+            boolean isNewCluster = false;
             if ((minDistance > _newClusterDistance) && (unusedCluster != null)) {
-                LOGGER.debug("{} >> initial cluster  for {}", feature, unusedCluster.getId());
+                LOGGER.debug("{} >> setting {} as initial cluster", feature, unusedCluster.getId());
 
-                unusedCluster.addFeature(feature);
-                
-                feature.setProcessCount(1);
-                Feature updatedFeature = new Feature(feature);
-                updatedFeature.setClusterId(unusedCluster.getId());
-                ctx.output(FEATURE_OUTPUT_TAG, updatedFeature);
-                return;
+                isNewCluster = true;
+                bestCluster = unusedCluster;
+                bestCluster.addFeature(feature);
             }
             
             int oldClusterId = feature.getClusterId();
             int newClusterId = bestCluster.getId();
             
-            if ((minDistance > 1000) && (minDistance != Double.MAX_VALUE)) {
-                LOGGER.debug("{} >> far from best cluster {}", feature, bestCluster);
-            }
-            
             if (oldClusterId == newClusterId) {
-                // TODO make stable count configurable, vary by inflight count.
+                // Increment the feature's stable count, and see if it's high enough
+                // to emit the feature
+                // TODO make stable count configurable, vary by in-flight count.
                 if (feature.getProcessCount() >= 5) {
                     LOGGER.debug("{} >> stable, removing", feature);
-                    out.collect(new FeatureResult(feature, bestCluster));
+                    out.collect(new FeatureResult(feature, clusters.get(oldClusterId)));
                     
-                    // So that old features stop influencing the cluster centroid.
-                    ctx.output(CLUSTER_UPDATE_OUTPUT_TAG, new ClusterUpdate(feature, oldClusterId, Cluster.NO_CLUSTER_ID));
+                    // So that old features stop influencing the cluster centroid, we
+                    // want to remove from the old cluster, but not put it into a new cluster.
+                    newClusterId = Cluster.NO_CLUSTER_ID;
                 } else {
                     LOGGER.debug("{} >> not stable enough, recycling", feature);
                     Feature updatedFeature = new Feature(feature);
@@ -211,27 +230,23 @@ public class KMeansClustering {
                     ctx.output(FEATURE_OUTPUT_TAG, updatedFeature);
                 }
             } else {
-                if (oldClusterId != Cluster.NO_CLUSTER_ID) {
-                    LOGGER.debug("{} >> moving to {} (cur distance {}, new distance {}", feature,
-                            newClusterId, curDistance, minDistance);
-                } else {
-                    LOGGER.debug("{} >> assigning to {}", feature, newClusterId);
-                }
-                
-                feature.setProcessCount(1);
-                ctx.output(CLUSTER_UPDATE_OUTPUT_TAG, new ClusterUpdate(feature, oldClusterId, newClusterId));
-
                 Feature updatedFeature = new Feature(feature);
                 updatedFeature.setClusterId(newClusterId);
+                updatedFeature.setProcessCount(1);
                 ctx.output(FEATURE_OUTPUT_TAG, updatedFeature);
+            }
+            
+            if (oldClusterId != newClusterId) {
+                ClusterUpdate clusterUpdate = new ClusterUpdate(feature, oldClusterId, newClusterId, isNewCluster);
+                ctx.output(CLUSTER_UPDATE_OUTPUT_TAG, clusterUpdate);
             }
         }
 
-        private boolean isMyCluster(Cluster cluster) {
+        private boolean isMyCluster(int clusterId) {
             // This cluster "belongs" to this operator if its ID belongs
             // to this operator's partition. The _partition number is
             // base 1...
-            return (cluster.getId() % _parallelism) == (_partition - 1);
+            return (clusterId % _parallelism) == (_partition - 1);
         }
 
     }

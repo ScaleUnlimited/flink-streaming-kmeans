@@ -179,8 +179,8 @@ public class KMeansClusteringTest {
         // Move the point towards the best cluster's location (centroid)
         double centroidX = bestCluster.getCentroid().getX();
         double centroidY = bestCluster.getCentroid().getY();
-        double newX = centroidX + (value.getX() - centroidX) * 0.8;
-        double newY = centroidY + (value.getY() - centroidY) * 0.8;
+        double newX = centroidX + (value.getX() - centroidX) * 0.5;
+        double newY = centroidY + (value.getY() - centroidY) * 0.5;
         return new Feature(value.getId(), newX, newY, -1);
     }
 
