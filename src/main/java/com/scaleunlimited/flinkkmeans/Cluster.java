@@ -34,12 +34,16 @@ public class Cluster implements Serializable {
         this.id = id;
     }
 
+    public boolean isUnused() {
+        return numFeatures == 0;
+    }
+
     public double distance(Feature f) {
-        if (numFeatures <= 0) {
-            return UNUSED_DISTANCE;
-        } else {
-            return centroid.distance(f, numFeatures);
+        if (numFeatures == 0) {
+            return Cluster.UNUSED_DISTANCE;
         }
+
+        return centroid.distance(f, numFeatures);
     }
     
     public void addFeature(Feature f) {
@@ -60,5 +64,6 @@ public class Cluster implements Serializable {
     public String toString() {
         return String.format("Cluster %d (%s) with %d features", id, centroid.toString(), numFeatures);
     }
+
     
 }
