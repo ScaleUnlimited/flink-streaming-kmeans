@@ -6,11 +6,12 @@ import java.util.List;
 import java.util.Map;
 
 import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.api.common.state.MapStateDescriptor;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.IterativeStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.co.CoProcessFunction;
+import org.apache.flink.streaming.api.functions.co.KeyedBroadcastProcessFunction;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.util.Collector;
@@ -42,6 +43,9 @@ import org.slf4j.LoggerFactory;
 public class KMeansClustering {
     private static final Logger LOGGER = LoggerFactory.getLogger(KMeansClustering.class);
 
+    private static final MapStateDescriptor<Integer, Cluster> CLUSTER_STATE_DESCRIPTOR = new MapStateDescriptor<Integer, Cluster>(
+                "clusters", Integer.class, Cluster.class);
+
     public static void build(StreamExecutionEnvironment env, SourceFunction<Feature> featuresSource,
             SinkFunction<FeatureResult> sink, int numClusters, double clusterDistance) {
         
@@ -69,9 +73,9 @@ public class KMeansClustering {
                 .name("features")
                 .iterate(5000L);
         
-        SingleOutputStreamOperator<FeatureResult> clustered = clusters
-                .broadcast()
-                .connect(features.shuffle())
+        SingleOutputStreamOperator<FeatureResult> clustered = features
+                .keyBy(feature -> feature.getId())
+                .connect(clusters.broadcast(CLUSTER_STATE_DESCRIPTOR))
                 .process(new ClusterFunction(seedClusters, clusterDistance))
                 .name("ClusterFunction");
         
@@ -90,8 +94,9 @@ public class KMeansClustering {
             .asQueryableState("centroids");
     }
     
+
     @SuppressWarnings("serial")
-    private static class ClusterFunction extends CoProcessFunction<ClusterUpdate, Feature, FeatureResult> {
+    private static class ClusterFunction extends KeyedBroadcastProcessFunction<Integer, Feature, ClusterUpdate, FeatureResult> {
 
         public static final OutputTag<ClusterUpdate> CLUSTER_UPDATE_OUTPUT_TAG = new OutputTag<ClusterUpdate>("cluster-update"){};
         public static final OutputTag<Feature> FEATURE_OUTPUT_TAG = new OutputTag<Feature>("feature"){};
@@ -141,10 +146,20 @@ public class KMeansClustering {
             }
         }
 
+        private boolean isMyCluster(int clusterId) {
+            // This cluster "belongs" to this operator if its ID belongs
+            // to this operator's partition. The _partition number is
+            // base 1...
+            return (clusterId % _parallelism) == (_partition - 1);
+        }
+
         @Override
-        public void processElement1(ClusterUpdate clusterUpdate, Context ctx, Collector<FeatureResult> out) throws Exception {
+        public void processBroadcastElement(ClusterUpdate clusterUpdate, Context ctx, Collector<FeatureResult> out) throws Exception {
             LOGGER.debug("{} >> Processing cluster update ({}/{})", clusterUpdate, _partition, _parallelism);
 
+            // TODO - use BroadcastState, not our own map, to keep track of clusters.
+            // ctx.getBroadcastState(CLUSTER_STATE_DESCRIPTOR)
+            
             // Cluster update has a feature, moving from one cluster (might be no cluster, for new feature) to another
             // cluster (might be no cluster, for a stable/emitted feature).
             int fromCluster = clusterUpdate.getFromClusterId();
@@ -168,8 +183,10 @@ public class KMeansClustering {
         }
 
         @Override
-        public void processElement2(Feature feature, Context ctx, Collector<FeatureResult> out) throws Exception {
+        public void processElement(Feature feature, ReadOnlyContext ctx, Collector<FeatureResult> out) throws Exception {
             LOGGER.debug("{} >> Processing feature ({}/{})", feature, _partition, _parallelism);
+
+            // TODO - use BroadcastState, not our own map, to find the best cluster.
 
             // Find the best (closest) cluster. We assume we have at least as many clusters as
             // we have parallel operators, as otherwise we won't be able to find one of "our"
@@ -240,13 +257,6 @@ public class KMeansClustering {
                 ClusterUpdate clusterUpdate = new ClusterUpdate(feature, oldClusterId, newClusterId, isNewCluster);
                 ctx.output(CLUSTER_UPDATE_OUTPUT_TAG, clusterUpdate);
             }
-        }
-
-        private boolean isMyCluster(int clusterId) {
-            // This cluster "belongs" to this operator if its ID belongs
-            // to this operator's partition. The _partition number is
-            // base 1...
-            return (clusterId % _parallelism) == (_partition - 1);
         }
 
     }
