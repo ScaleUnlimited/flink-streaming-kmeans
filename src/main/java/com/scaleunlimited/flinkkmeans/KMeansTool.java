@@ -94,28 +94,30 @@ public class KMeansTool {
             JobSubmissionResult submission = _localCluster.start(Deadline.now().plus(TOOL_TIMEOUT), env);
             LOGGER.info("Starting job with id " + submission.getJobID());
             
-            ValueStateDescriptor<Feature> stateDescriptor = new ValueStateDescriptor<>("centroid",
-                    TypeInformation.of(new TypeHint<Feature>() {}));
+            if (options.isQueryable()) {
+                ValueStateDescriptor<Feature> stateDescriptor = new ValueStateDescriptor<>("centroid",
+                        TypeInformation.of(new TypeHint<Feature>() {}));
 
-            // Set up Jetty server
-            server = new Server(8085);
-            // We assume the tool is running on the same server, but if we're not in local mode, then
-            // we need to create a QueryableStateClient
-            ContextHandler contextClusters = new ContextHandler("/clusters");
-            contextClusters.setHandler(new ClustersRequestHandler(_localCluster.getQueryableStateClient(),
-                    stateDescriptor, submission.getJobID(), options.getNumClusters()));
+                // Set up Jetty server
+                server = new Server(8085);
+                // We assume the tool is running on the same server, but if we're not in local mode, then
+                // we need to create a QueryableStateClient
+                ContextHandler contextClusters = new ContextHandler("/clusters");
+                contextClusters.setHandler(new ClustersRequestHandler(_localCluster.getQueryableStateClient(),
+                        stateDescriptor, submission.getJobID(), options.getNumClusters()));
 
-            ContextHandler contextFeatures = new ContextHandler("/features");
-            contextFeatures.setHandler(new FeaturesRequestHandler());
+                ContextHandler contextFeatures = new ContextHandler("/features");
+                contextFeatures.setHandler(new FeaturesRequestHandler());
 
-            ContextHandler contextMap = new ContextHandler("/map");
-            contextMap.setHandler(new MapRequestHandler(options.getAccessToken()));
+                ContextHandler contextMap = new ContextHandler("/map");
+                contextMap.setHandler(new MapRequestHandler(options.getAccessToken()));
 
-            ContextHandlerCollection contexts = new ContextHandlerCollection();
-            contexts.setHandlers(new Handler[] { contextClusters, contextFeatures, contextMap });
+                ContextHandlerCollection contexts = new ContextHandlerCollection();
+                contexts.setHandlers(new Handler[] { contextClusters, contextFeatures, contextMap });
 
-            server.setHandler(contexts);
-            server.start();
+                server.setHandler(contexts);
+                server.start();
+            }
             
             while (_localCluster.isRunning()) {
                 Thread.sleep(1000L);
@@ -289,6 +291,7 @@ public class KMeansTool {
         private String _input;
         private int _parallelism = 2;
         private int _numClusters = 10;
+        private boolean _queryable = false;
         
         @Option(name = "-accesstoken", usage = "MapBox access token", required = true)
         public void setAccessToken(String accessToken) {
@@ -334,6 +337,17 @@ public class KMeansTool {
         public int getNumClusters() {
             return _numClusters;
         }
+        
+        @Option(name = "-queryable", usage = "enable HTTP access to results", required = false)
+        public void setQueryable(boolean queryable) {
+            _queryable = queryable;
+        }
+        
+        public boolean isQueryable() {
+            return _queryable;
+        }
+
+
     }
 
 }
