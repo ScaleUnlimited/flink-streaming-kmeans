@@ -13,3 +13,15 @@ Features are repeatedly processed until they are "stable", which we define as no
 We broadcast the cluster updates (feature addition and deletion) to all ClusterFunction operators. Features are partitioned by their id between ClusterFunction operators.
 
 The side outputs of the ClusterFunction are updates to clusters, and features that aren't yet stable. These close out the cluster and feature iteration streams. The regular output from the ClusterFunction is a stable Feature, plus information about the cluster it's assigned to (cluster id and current centroid).
+
+# KMeansTool
+
+To run the tool from Eclipse, set up `com.scaleunlimited.flinkkmeans.KMeansTool` as the main class, with the following parameters:
+
+- `-local` (to specify running Flink locally, versus on a real cluster)
+- `-input <path to input file>` (e.g. `/path/to/flink-streaming-kmeans/src/test/resources/citibike-20180801-min.tsv`)
+- `-accesstoken <MapBox access token>`
+- `-clusters <number of cluster>` (5 or 10 are good values)
+- `-queryable` (to enable calls to the API, on port 8085).
+
+Once the tool is running with the above options, then open `http://localhost:8085/map` in your browser.
