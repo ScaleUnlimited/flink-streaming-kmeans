@@ -6,8 +6,7 @@ import java.io.Serializable;
 public class FeatureResult implements Serializable {
 
     private Feature feature;
-    private int clusterId;
-    private Feature centroid;
+    private Cluster cluster;
     
     public FeatureResult() {
         // So Flink treats it as a POJO
@@ -15,18 +14,24 @@ public class FeatureResult implements Serializable {
     
     public FeatureResult(Feature feature, Cluster cluster) {
         this.feature = new Feature(feature);
-        this.clusterId = cluster.getId();
-        this.centroid = new Feature(cluster.getCentroid());
+        this.cluster = new Cluster(cluster);
     }
 
     public FeatureResult(FeatureResult cf) {
         this.feature = new Feature(cf.feature);
-        this.clusterId = cf.clusterId;
-        this.centroid = new Feature(cf.centroid);
+        this.cluster = new Cluster(cf.cluster);
+    }
+    
+    public Cluster getCluster() {
+        return cluster;
+    }
+    
+    public void setCluster(Cluster cluster) {
+        throw new RuntimeException("You can't set the cluster");
     }
     
     public int getClusterId() {
-        return clusterId;
+        return cluster.getId();
     }
 
     public void setClusterId(int clusterId) {
@@ -34,7 +39,7 @@ public class FeatureResult implements Serializable {
     }
     
     public Feature getCentroid() {
-        return centroid;
+        return cluster.getCentroid();
     }
     
     public void setCentroid(Feature centroid) {
@@ -49,8 +54,16 @@ public class FeatureResult implements Serializable {
         throw new RuntimeException("You can't set the feature");
     }
     
+    public int getClusterSize() {
+        return cluster.getSize();
+    }
+    
+    public void setClusterSize(int clusterSize) {
+        throw new RuntimeException("You can't set the cluster size");
+    }
+    
     @Override
     public String toString() {
-        return String.format("%d (%s) | %s", clusterId, centroid, feature);
+        return String.format("%d (%s) | %s", getClusterId(), getCentroid(), feature);
     }
 }

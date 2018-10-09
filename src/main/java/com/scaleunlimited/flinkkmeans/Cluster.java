@@ -9,15 +9,13 @@ public class Cluster implements Serializable {
     public static final double UNUSED_DISTANCE = Double.MAX_VALUE;
     
     private int id;
-    
-    // Average of all features that are part of our cluster.
-    private Feature centroid;
-    private int numFeatures;
+    private Feature centroid;   // Sum of all features that are part of our cluster.
+    private int numFeatures;    // So we can calculate the real (average) centroid.
     
     public Cluster(int clusterId) {
         this.id = clusterId;
         
-        this.centroid = new Feature(clusterId, 0, 0);
+        this.centroid = new Feature(Feature.NO_FEATURE_ID, 0, 0);
         this.numFeatures = 0;
     }
     
@@ -26,6 +24,12 @@ public class Cluster implements Serializable {
         addFeature(centroid);
     }
 
+    public Cluster(Cluster cluster) {
+        this.id = cluster.getId();
+        this.centroid = new Feature(cluster.getCentroid());
+        this.numFeatures = cluster.getSize();
+    }
+    
     public int getId() {
         return id;
     }
@@ -56,8 +60,18 @@ public class Cluster implements Serializable {
         numFeatures--;
     }
 
+    /**
+     * Calculate the actual centroid (average the feature values) and
+     * return a copy.
+     * 
+     * @return
+     */
     public Feature getCentroid() {
         return new Feature(centroid, numFeatures);
+    }
+    
+    public int getSize() {
+        return numFeatures;
     }
     
     @Override
