@@ -239,7 +239,7 @@ public class KMeansClusteringTest {
                     Cluster c = response.value();
                     System.out.println(c);
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    fail("Exception getting queryable state: " + e.getMessage());
                 }
             });
         }
