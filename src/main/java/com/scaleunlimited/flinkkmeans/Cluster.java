@@ -25,9 +25,9 @@ public class Cluster implements Serializable {
     }
 
     public Cluster(Cluster cluster) {
-        this.id = cluster.getId();
-        this.centroid = new Feature(cluster.getCentroid());
-        this.numFeatures = cluster.getSize();
+        this.id = cluster.id;
+        this.centroid = new Feature(cluster.centroid);
+        this.numFeatures = cluster.numFeatures;
     }
     
     public int getId() {
