@@ -55,7 +55,7 @@ public class FeatureResult implements Serializable {
     }
     
     public int getClusterSize() {
-        return cluster.getSize();
+        return cluster.getNumFeatures();
     }
     
     public void setClusterSize(int clusterSize) {

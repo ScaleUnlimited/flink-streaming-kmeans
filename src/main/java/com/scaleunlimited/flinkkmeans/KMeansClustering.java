@@ -131,9 +131,15 @@ public class KMeansClustering {
             }
             
             features.add(new Feature(result.getFeature()));
-            if (features.size() > _featuresPerCluster) {
+            
+            // The cluster has N features assigned to it, though these are the
+            // features that haven't yet been emitted. But it gives us a better
+            // bounds on what features (how many) to show, so use that.
+            int maxFeatures = Math.min(_featuresPerCluster, result.getClusterSize() + 1);
+            while (features.size() > maxFeatures) {
                 features.remove(0);
             }
+            
             _featureResults.update(features);
             
             return result;
