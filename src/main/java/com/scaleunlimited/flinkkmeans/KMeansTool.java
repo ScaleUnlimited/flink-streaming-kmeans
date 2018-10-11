@@ -6,10 +6,9 @@ import java.io.InputStream;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 
 import javax.servlet.ServletException;
@@ -186,19 +185,40 @@ public class KMeansTool {
             out.append("{\n\t\"type\": \"FeatureCollection\",\n");
             out.append("\t\"features\": [");
 
-            Queue<Cluster> centroids = new ConcurrentLinkedQueue<>();
+            List<CompletableFuture<ValueState<Cluster>>> futures = new ArrayList<>();
             for (int i = 0; i < _numClusters; i++) {
                 CompletableFuture<ValueState<Cluster>> resultFuture = _client.getKvState(_jobID, 
                         KMeansClustering.CLUSTERS_QUERY_KEY, i, new TypeHint<Integer>() { }, _stateDescriptor);
+                futures.add(resultFuture);
+            }
+
+            // Wait  for all futures to complete.
+            // FUTURE - this will cause a failure if any cluster doesn't have state, so instead we
+            // could use a thenApply(function) to handle the result, in the loop above. Same for
+            // the collection of features below.
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[_numClusters])).join();
+            
+            boolean firstCluster = true;
+            for (CompletableFuture<ValueState<Cluster>> future : futures) {
 
                 try {
-                    Cluster centroid = resultFuture.get().value();
-                    centroids.add(centroid);
+                    Cluster cluster = future.get().value();
+                    if (cluster.isUnused()) {
+                        continue;
+                    }
+                    
+                    if (!firstCluster) {
+                        out.append(",\n\t\t");
+                    } else {
+                        firstCluster = false;
+                    }
+
+                    printCluster(out, cluster);
                 } catch (ExecutionException e) {
                     if (e.getCause() instanceof UnknownKeyOrNamespaceException) {
                         // Ignore this error, as it happens when the flow hasn't generated results yet, so
                         // we want to just return an empty result.
-                        LOGGER.debug("Can't get results yet for cluster {}", i);
+                        LOGGER.debug("Can't get results yet for cluster");
                     } else {
                         LOGGER.error("Error getting cluster data: " + e.getMessage(), e);
                     }
@@ -214,17 +234,6 @@ public class KMeansTool {
                     return;
                 }
             }
-
-            boolean firstCluster = true;
-            for (Cluster centroid : centroids) {
-                if (!firstCluster) {
-                    out.append(",\n\t\t");
-                } else {
-                    firstCluster = false;
-                }
-
-                printClusterCentroid(out, centroid);
-            }
             
             out.append("\n\t]\n");
             out.append("}\n");
@@ -232,7 +241,7 @@ public class KMeansTool {
             baseRequest.setHandled(true);
         }
 
-        private void printClusterCentroid(StringBuilder out, Cluster cluster) {
+        private void printCluster(StringBuilder out, Cluster cluster) {
             Feature centroid = cluster.getCentroid();
             double longitude = centroid.getX();
             double latitude = centroid.getY();
@@ -244,7 +253,7 @@ public class KMeansTool {
             out.append(String.format("\t\t\t\t\"coordinates\": [%f, %f]\n", longitude, latitude));
             out.append("\t\t\t},\n");
             out.append("\t\t\t\"properties\": {\n");
-            out.append(String.format("\t\t\t\t\"size\": %d\n", cluster.getSize()));
+            out.append(String.format("\t\t\t\t\"size\": %d\n", cluster.getNumFeatures()));
             out.append("\t\t\t}\n");
             out.append("\t\t}");
         }
@@ -280,19 +289,38 @@ public class KMeansTool {
             out.append("{\n\t\"type\": \"FeatureCollection\",\n");
             out.append("\t\"features\": [");
 
-            Queue<Feature> features = new ConcurrentLinkedQueue<>();
+            List<CompletableFuture<ValueState<List<Feature>>>> futures = new ArrayList<>();
             for (int i = 0; i < _numClusters; i++) {
                 CompletableFuture<ValueState<List<Feature>>> resultFuture = _client.getKvState(_jobID, 
                         KMeansClustering.FEATURES_QUERY_KEY, i, new TypeHint<Integer>() { }, _stateDescriptor);
-
+                futures.add(resultFuture);
+            }
+            
+            // Wait  for all futures to complete.
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[_numClusters])).join();
+            
+            boolean firstFeature = true;
+            for (CompletableFuture<ValueState<List<Feature>>> future : futures) {
                 try {
-                    List<Feature> clusterFeatures = resultFuture.get().value();
-                    features.addAll(clusterFeatures);
+                    List<Feature> clusterFeatures = future.get().value();
+                    if ((clusterFeatures == null) || clusterFeatures.isEmpty()) {
+                        continue;
+                    }
+                    
+                    for (Feature feature : clusterFeatures) {
+                        if (!firstFeature) {
+                            out.append(",\n\t\t");
+                        } else {
+                            firstFeature = false;
+                        }
+
+                        printFeature(out, feature);
+                    }
                 } catch (ExecutionException e) {
                     if (e.getCause() instanceof UnknownKeyOrNamespaceException) {
                         // Ignore this error, as it happens when the flow hasn't generated results yet, so
                         // we want to just return an empty result.
-                        LOGGER.debug("Can't get feature results yet for cluster {}", i);
+                        LOGGER.debug("Can't get feature results yet for cluster");
                     } else {
                         LOGGER.error("Error getting feature results for cluster: " + e.getMessage(), e);
                     }
@@ -309,17 +337,6 @@ public class KMeansTool {
                 }
             }
 
-            boolean firstFeature = true;
-            for (Feature feature : features) {
-                if (!firstFeature) {
-                    out.append(",\n\t\t");
-                } else {
-                    firstFeature = false;
-                }
-
-                printFeature(out, feature);
-            }
-            
             out.append("\n\t]\n");
             out.append("}\n");
             writer.print(out.toString());
@@ -338,7 +355,6 @@ public class KMeansTool {
             out.append("\t\t\t}\n");
             out.append("\t\t}");
         }
-
     }
 
     private static class MapRequestHandler extends AbstractHandler {

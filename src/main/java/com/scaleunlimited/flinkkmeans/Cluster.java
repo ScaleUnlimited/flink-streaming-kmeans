@@ -12,6 +12,10 @@ public class Cluster implements Serializable {
     private Feature centroid;   // Sum of all features that are part of our cluster.
     private int numFeatures;    // So we can calculate the real (average) centroid.
     
+    public Cluster() {
+        // So it's a valid POJO.
+    }
+    
     public Cluster(int clusterId) {
         this.id = clusterId;
         
@@ -70,8 +74,16 @@ public class Cluster implements Serializable {
         return new Feature(centroid, numFeatures);
     }
     
-    public int getSize() {
+    public void setCentroid(Feature centroid) {
+        throw new RuntimeException("You can't set the centroid");
+    }
+    
+    public int getNumFeatures() {
         return numFeatures;
+    }
+    
+    public void setNumFeatures(int size) {
+        throw new RuntimeException("You can't set the number of features");
     }
     
     @Override
