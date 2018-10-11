@@ -52,11 +52,13 @@ import org.slf4j.LoggerFactory;
 public class KMeansClustering {
     private static final Logger LOGGER = LoggerFactory.getLogger(KMeansClustering.class);
 
+    public static final String CLUSTERS_QUERY_KEY = "clusters";
+    
     private static final MapStateDescriptor<Integer, Cluster> CLUSTER_STATE_DESCRIPTOR = new MapStateDescriptor<Integer, Cluster>(
                 "clusters", Integer.class, Cluster.class);
 
     public static void build(StreamExecutionEnvironment env, SourceFunction<Feature> featuresSource,
-            SinkFunction<FeatureResult> sink, int numClusters, double clusterDistance) {
+            SinkFunction<FeatureResult> sink, int numClusters, double clusterDistance, boolean queryable) {
         
         // Create unused clusters.
         List<Cluster> clusters = new ArrayList<>();
@@ -64,11 +66,12 @@ public class KMeansClustering {
             clusters.add(i, new Cluster(i));
         }
 
-        build(env, featuresSource, sink, clusters, clusterDistance);
+        build(env, featuresSource, sink, clusters, clusterDistance, queryable);
     }
     
     public static void build(StreamExecutionEnvironment env, SourceFunction<Feature> featuresSource,
-            SinkFunction<FeatureResult> sink, List<Cluster> seedClusters, double clusterDistance) {
+            SinkFunction<FeatureResult> sink, List<Cluster> seedClusters, double clusterDistance,
+            boolean queryable) {
         
         // HACK! We have to provide a source that runs forever (or until the timer terminates it),
         // so that checkpointing works with iterations.
@@ -94,10 +97,14 @@ public class KMeansClustering {
         
         // Make the results queryable (both clusters and features),
         // and output to the sink.
-        clustered.keyBy(result -> result.getClusterId())
-            .map(new QueryableFeatureResult())
-            .addSink(sink)
-            .name("results");
+        if (queryable) {
+            clustered.keyBy(result -> result.getClusterId())
+                .map(new QueryableFeatureResult())
+                .addSink(sink).name("results");
+        } else {
+            clustered.addSink(sink)
+                .name("results");
+        }
     }
     
     @SuppressWarnings("serial")

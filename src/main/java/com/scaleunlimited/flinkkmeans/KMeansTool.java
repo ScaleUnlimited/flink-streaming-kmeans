@@ -87,7 +87,8 @@ public class KMeansTool {
         
         try {
             double maxDistance = KMeansUtils.calcMaxDistance(features, options.getNumClusters());
-            KMeansClustering.build(env, featuresSource, new DiscardingSink<>(), options.getNumClusters(), maxDistance);
+            KMeansClustering.build(env, featuresSource, new DiscardingSink<>(),
+                    options.getNumClusters(), maxDistance, options.isQueryable());
             
             // TODO handle remote case, with no local cluster
             // TODO do we actually neeed a timeout in local mode?
@@ -95,8 +96,8 @@ public class KMeansTool {
             LOGGER.info("Starting job with id " + submission.getJobID());
             
             if (options.isQueryable()) {
-                ValueStateDescriptor<Feature> stateDescriptor = new ValueStateDescriptor<>("centroid",
-                        TypeInformation.of(new TypeHint<Feature>() {}));
+                ValueStateDescriptor<Cluster> stateDescriptor = new ValueStateDescriptor<>("centroid",
+                        TypeInformation.of(new TypeHint<Cluster>() {}));
 
                 // Set up Jetty server
                 server = new Server(8085);
@@ -154,12 +155,12 @@ public class KMeansTool {
     private static class ClustersRequestHandler extends AbstractHandler {
 
         private QueryableStateClient _client;
-        private ValueStateDescriptor<Feature> _stateDescriptor;
+        private ValueStateDescriptor<Cluster> _stateDescriptor;
         private JobID _jobID;
         private int _numClusters;
         
         public ClustersRequestHandler(QueryableStateClient client,
-                ValueStateDescriptor<Feature> stateDescriptor, JobID jobID,
+                ValueStateDescriptor<Cluster> stateDescriptor, JobID jobID,
                 int numClusters) {
             super();
             
@@ -181,13 +182,13 @@ public class KMeansTool {
             out.append("{\n\t\"type\": \"FeatureCollection\",\n");
             out.append("\t\"features\": [");
 
-            Queue<Feature> centroids = new ConcurrentLinkedQueue<>();
+            Queue<Cluster> centroids = new ConcurrentLinkedQueue<>();
             for (int i = 0; i < _numClusters; i++) {
-                CompletableFuture<ValueState<Feature>> resultFuture = _client.getKvState(_jobID, "centroids", i,
-                        new TypeHint<Integer>() { }, _stateDescriptor);
+                CompletableFuture<ValueState<Cluster>> resultFuture = _client.getKvState(_jobID, 
+                        KMeansClustering.CLUSTERS_QUERY_KEY, i, new TypeHint<Integer>() { }, _stateDescriptor);
 
                 try {
-                    Feature centroid = resultFuture.get().value();
+                    Cluster centroid = resultFuture.get().value();
                     centroids.add(centroid);
                 } catch (ExecutionException e) {
                     if (e.getCause() instanceof UnknownKeyOrNamespaceException) {
@@ -211,7 +212,7 @@ public class KMeansTool {
             }
 
             boolean firstCluster = true;
-            for (Feature centroid : centroids) {
+            for (Cluster centroid : centroids) {
                 if (!firstCluster) {
                     out.append(",\n\t\t");
                 } else {
@@ -227,7 +228,8 @@ public class KMeansTool {
             baseRequest.setHandled(true);
         }
 
-        private void printClusterCentroid(StringBuilder out, Feature centroid) {
+        private void printClusterCentroid(StringBuilder out, Cluster cluster) {
+            Feature centroid = cluster.getCentroid();
             double longitude = centroid.getX();
             double latitude = centroid.getY();
             
@@ -236,6 +238,9 @@ public class KMeansTool {
             out.append("\t\t\t\"geometry\": {\n");
             out.append("\t\t\t\t\"type\": \"Point\",\n");
             out.append(String.format("\t\t\t\t\"coordinates\": [%f, %f]\n", longitude, latitude));
+            out.append("\t\t\t},\n");
+            out.append("\t\t\t\"properties\": {\n");
+            out.append(String.format("\t\t\t\t\"size\": %d\n", cluster.getSize()));
             out.append("\t\t\t}\n");
             out.append("\t\t}");
         }

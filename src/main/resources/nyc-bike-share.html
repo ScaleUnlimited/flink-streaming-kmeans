@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset='utf-8' />
-    <title>Display a map</title>
+    <title>Citibike Ride Starts</title>
     <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no' />
     <script src='https://api.tiles.mapbox.com/mapbox-gl-js/v0.48.0/mapbox-gl.js'></script>
     <link href='https://api.tiles.mapbox.com/mapbox-gl-js/v0.48.0/mapbox-gl.css' rel='stylesheet' />
@@ -47,7 +47,7 @@ map.on('load', function () {
         "source": "flinkcentroids",
         "type": "circle",
         "paint": {
-            "circle-radius": 20,
+            "circle-radius": ["get", "size"],
             "circle-opacity": 0.6,
             "circle-color": "#FF0000"
         },
