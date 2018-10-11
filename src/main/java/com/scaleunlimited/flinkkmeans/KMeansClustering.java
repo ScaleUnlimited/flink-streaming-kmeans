@@ -2,12 +2,22 @@ package com.scaleunlimited.flinkkmeans;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.api.common.state.MapState;
 import org.apache.flink.api.common.state.MapStateDescriptor;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.runtime.state.FunctionInitializationContext;
+import org.apache.flink.runtime.state.FunctionSnapshotContext;
+import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.datastream.IterativeStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -44,6 +54,7 @@ public class KMeansClustering {
     private static final Logger LOGGER = LoggerFactory.getLogger(KMeansClustering.class);
 
     public static final String CLUSTERS_QUERY_KEY = "clusters";
+    public static final String FEATURES_QUERY_KEY = "features";
     
     private static final MapStateDescriptor<Integer, Cluster> CLUSTER_STATE_DESCRIPTOR = new MapStateDescriptor<Integer, Cluster>(
                 "clusters", Integer.class, Cluster.class);
@@ -86,19 +97,73 @@ public class KMeansClustering {
         features.closeWith(clustered.getSideOutput(ClusterFunction.FEATURE_OUTPUT_TAG));
         clusters.closeWith(clustered.getSideOutput(ClusterFunction.CLUSTER_UPDATE_OUTPUT_TAG));
         
-        // Output resulting features (with each one's current centroid)
+        // Make the results queryable (both clusters and features),
+        // and output to the sink.
+        if (queryable) {
+            final int featuresPerCluster = 100 / seedClusters.size();
+            clustered = clustered.keyBy(result -> result.getClusterId())
+                .map(new QueryableFeatureResult(featuresPerCluster));
+        }
+
         clustered.addSink(sink)
             .name("results");
+    }
+    
+    @SuppressWarnings("serial")
+    private static class QueryableFeatureResult extends RichMapFunction<FeatureResult, FeatureResult> implements CheckpointedFunction {
+
+        private int _featuresPerCluster;
         
-        // Also make the resulting clusters queryable.
-        if (queryable) {
-            clustered.map(result -> result.getCluster())
-                .keyBy(cluster -> cluster.getId())
-                .asQueryableState(CLUSTERS_QUERY_KEY);
+        private transient ValueState<Cluster> _clusterResults;
+        private transient ValueState<List<Feature>> _featureResults;
+
+        public QueryableFeatureResult(int featuresPerCluster) {
+            _featuresPerCluster = featuresPerCluster;
+        }
+        
+        @Override
+        public FeatureResult map(FeatureResult result) throws Exception {
+            _clusterResults.update(result.getCluster());
+            
+            List<Feature> features = _featureResults.value();
+            if (features == null) {
+                features = new LinkedList<>();
+            }
+            
+            features.add(new Feature(result.getFeature()));
+            if (features.size() > _featuresPerCluster) {
+                features.remove(0);
+            }
+            _featureResults.update(features);
+            
+            return result;
+        }
+
+        @Override
+        public void initializeState(FunctionInitializationContext ctx) throws Exception {
+            ValueStateDescriptor<Cluster> clusterDescriptor =
+                    new ValueStateDescriptor<>(
+                            "clusters",
+                            TypeInformation.of(new TypeHint<Cluster>() {}));
+            clusterDescriptor.setQueryable(KMeansClustering.CLUSTERS_QUERY_KEY);
+            _clusterResults = getRuntimeContext().getState(clusterDescriptor);
+            
+            ValueStateDescriptor<List<Feature>> featureDescriptor =
+                    new ValueStateDescriptor<>(
+                            "features",
+                            TypeInformation.of(new TypeHint<List<Feature>>() {}));
+            featureDescriptor.setQueryable(KMeansClustering.FEATURES_QUERY_KEY);
+            
+            _featureResults = getRuntimeContext().getState(featureDescriptor);
+        }
+
+        @Override
+        public void snapshotState(FunctionSnapshotContext ctx) throws Exception {
+            // Nothing to do, managed for us.
         }
     }
     
-
+    
     @SuppressWarnings("serial")
     private static class ClusterFunction extends KeyedBroadcastProcessFunction<Integer, Feature, ClusterUpdate, FeatureResult> {
 
