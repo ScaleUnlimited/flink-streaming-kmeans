@@ -47,7 +47,7 @@ map.on('load', function () {
         "source": "flinkcentroids",
         "type": "circle",
         "paint": {
-            "circle-radius": 20,
+            "circle-radius": ["get", "size"],
             "circle-opacity": 0.6,
             "circle-color": "#FF0000"
         },

@@ -238,6 +238,8 @@ public class KMeansTool {
             out.append("\t\t\t\"geometry\": {\n");
             out.append("\t\t\t\t\"type\": \"Point\",\n");
             out.append(String.format("\t\t\t\t\"coordinates\": [%f, %f]\n", longitude, latitude));
+            out.append("\t\t\t},\n");
+            out.append("\t\t\t\"properties\": {\n");
             out.append(String.format("\t\t\t\t\"size\": %d\n", cluster.getSize()));
             out.append("\t\t\t}\n");
             out.append("\t\t}");
