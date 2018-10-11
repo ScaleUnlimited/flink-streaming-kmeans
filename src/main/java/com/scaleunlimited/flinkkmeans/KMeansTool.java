@@ -96,8 +96,11 @@ public class KMeansTool {
             LOGGER.info("Starting job with id " + submission.getJobID());
             
             if (options.isQueryable()) {
-                ValueStateDescriptor<Cluster> stateDescriptor = new ValueStateDescriptor<>("centroid",
+                ValueStateDescriptor<Cluster> clustersStateDescriptor = new ValueStateDescriptor<>("centroid",
                         TypeInformation.of(new TypeHint<Cluster>() {}));
+
+                ValueStateDescriptor<List<Feature>> featuresStateDescriptor = new ValueStateDescriptor<>("features",
+                        TypeInformation.of(new TypeHint<List<Feature>>() {}));
 
                 // Set up Jetty server
                 server = new Server(8085);
@@ -105,10 +108,11 @@ public class KMeansTool {
                 // we need to create a QueryableStateClient
                 ContextHandler contextClusters = new ContextHandler("/clusters");
                 contextClusters.setHandler(new ClustersRequestHandler(_localCluster.getQueryableStateClient(),
-                        stateDescriptor, submission.getJobID(), options.getNumClusters()));
+                        clustersStateDescriptor, submission.getJobID(), options.getNumClusters()));
 
                 ContextHandler contextFeatures = new ContextHandler("/features");
-                contextFeatures.setHandler(new FeaturesRequestHandler());
+                contextFeatures.setHandler(new FeaturesRequestHandler(_localCluster.getQueryableStateClient(),
+                        featuresStateDescriptor, submission.getJobID(), options.getNumClusters()));
 
                 ContextHandler contextMap = new ContextHandler("/map");
                 contextMap.setHandler(new MapRequestHandler(options.getAccessToken()));
@@ -248,21 +252,93 @@ public class KMeansTool {
 
     private static class FeaturesRequestHandler extends AbstractHandler {
 
-        
-        public FeaturesRequestHandler() {
+        private QueryableStateClient _client;
+        private ValueStateDescriptor<List<Feature>> _stateDescriptor;
+        private JobID _jobID;
+        private int _numClusters;
+
+        public FeaturesRequestHandler(QueryableStateClient client,
+                ValueStateDescriptor<List<Feature>> stateDescriptor, JobID jobID,
+                int numClusters) {
+            super();
+            
+            _client = client;
+            _stateDescriptor = stateDescriptor;
+            _jobID = jobID;
+            _numClusters = numClusters;
         }
         
         @Override
         public void handle(String target, Request baseRequest,
                 HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
-            response.setContentType("text/html; charset=utf-8");
+            response.setContentType("application/json; charset=utf-8");
             response.setStatus(HttpServletResponse.SC_OK);
+            response.setHeader("Access-Control-Allow-Origin", "*");
             
-
             PrintWriter writer = response.getWriter();
-            writer.print("/features has not yet been implemented");
+            StringBuilder out = new StringBuilder();
+            out.append("{\n\t\"type\": \"FeatureCollection\",\n");
+            out.append("\t\"features\": [");
+
+            Queue<Feature> features = new ConcurrentLinkedQueue<>();
+            for (int i = 0; i < _numClusters; i++) {
+                CompletableFuture<ValueState<List<Feature>>> resultFuture = _client.getKvState(_jobID, 
+                        KMeansClustering.FEATURES_QUERY_KEY, i, new TypeHint<Integer>() { }, _stateDescriptor);
+
+                try {
+                    List<Feature> clusterFeatures = resultFuture.get().value();
+                    features.addAll(clusterFeatures);
+                } catch (ExecutionException e) {
+                    if (e.getCause() instanceof UnknownKeyOrNamespaceException) {
+                        // Ignore this error, as it happens when the flow hasn't generated results yet, so
+                        // we want to just return an empty result.
+                        LOGGER.debug("Can't get feature results yet for cluster {}", i);
+                    } else {
+                        LOGGER.error("Error getting feature results for cluster: " + e.getMessage(), e);
+                    }
+                    
+                    break;
+                } catch (Exception e) {
+                    LOGGER.error("Error getting cluster features data: " + e.getMessage(), e);
+
+                    response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+                    writer.println(String.format("{ \"error\": \"%s\"", e.getMessage()));
+
+                    baseRequest.setHandled(true);
+                    return;
+                }
+            }
+
+            boolean firstFeature = true;
+            for (Feature feature : features) {
+                if (!firstFeature) {
+                    out.append(",\n\t\t");
+                } else {
+                    firstFeature = false;
+                }
+
+                printFeature(out, feature);
+            }
+            
+            out.append("\n\t]\n");
+            out.append("}\n");
+            writer.print(out.toString());
             baseRequest.setHandled(true);
         }
+        
+        private void printFeature(StringBuilder out, Feature feature) {
+            double longitude = feature.getX();
+            double latitude = feature.getY();
+            
+            out.append("{\n");
+            out.append("\t\t\t\"type\": \"Feature\",\n");
+            out.append("\t\t\t\"geometry\": {\n");
+            out.append("\t\t\t\t\"type\": \"Point\",\n");
+            out.append(String.format("\t\t\t\t\"coordinates\": [%f, %f]\n", longitude, latitude));
+            out.append("\t\t\t}\n");
+            out.append("\t\t}");
+        }
+
     }
 
     private static class MapRequestHandler extends AbstractHandler {

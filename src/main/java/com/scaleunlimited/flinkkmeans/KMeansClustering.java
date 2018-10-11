@@ -2,6 +2,7 @@ package com.scaleunlimited.flinkkmeans;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
@@ -53,6 +54,7 @@ public class KMeansClustering {
     private static final Logger LOGGER = LoggerFactory.getLogger(KMeansClustering.class);
 
     public static final String CLUSTERS_QUERY_KEY = "clusters";
+    public static final String FEATURES_QUERY_KEY = "features";
     
     private static final MapStateDescriptor<Integer, Cluster> CLUSTER_STATE_DESCRIPTOR = new MapStateDescriptor<Integer, Cluster>(
                 "clusters", Integer.class, Cluster.class);
@@ -98,35 +100,61 @@ public class KMeansClustering {
         // Make the results queryable (both clusters and features),
         // and output to the sink.
         if (queryable) {
-            clustered.keyBy(result -> result.getClusterId())
-                .map(new QueryableFeatureResult())
-                .addSink(sink).name("results");
-        } else {
-            clustered.addSink(sink)
-                .name("results");
+            final int featuresPerCluster = 100 / seedClusters.size();
+            clustered = clustered.keyBy(result -> result.getClusterId())
+                .map(new QueryableFeatureResult(featuresPerCluster));
         }
+
+        clustered.addSink(sink)
+            .name("results");
     }
     
     @SuppressWarnings("serial")
     private static class QueryableFeatureResult extends RichMapFunction<FeatureResult, FeatureResult> implements CheckpointedFunction {
 
-        private transient ValueState<FeatureResult> _clusterResults;
+        private int _featuresPerCluster;
+        
+        private transient ValueState<Cluster> _clusterResults;
+        private transient ValueState<List<Feature>> _featureResults;
 
+        public QueryableFeatureResult(int featuresPerCluster) {
+            _featuresPerCluster = featuresPerCluster;
+        }
+        
         @Override
         public FeatureResult map(FeatureResult result) throws Exception {
-            // TODO Auto-generated method stub
+            _clusterResults.update(result.getCluster());
+            
+            List<Feature> features = _featureResults.value();
+            if (features == null) {
+                features = new LinkedList<>();
+            }
+            
+            features.add(new Feature(result.getFeature()));
+            if (features.size() > _featuresPerCluster) {
+                features.remove(0);
+            }
+            _featureResults.update(features);
+            
             return result;
         }
 
         @Override
         public void initializeState(FunctionInitializationContext ctx) throws Exception {
-            ValueStateDescriptor<FeatureResult> descriptor =
+            ValueStateDescriptor<Cluster> clusterDescriptor =
                     new ValueStateDescriptor<>(
-                            "feature-results", // the state name
-                            TypeInformation.of(new TypeHint<FeatureResult>() {}));
-            descriptor.setQueryable("centroids");
+                            "clusters",
+                            TypeInformation.of(new TypeHint<Cluster>() {}));
+            clusterDescriptor.setQueryable(KMeansClustering.CLUSTERS_QUERY_KEY);
+            _clusterResults = getRuntimeContext().getState(clusterDescriptor);
             
-            _clusterResults = getRuntimeContext().getState(descriptor);
+            ValueStateDescriptor<List<Feature>> featureDescriptor =
+                    new ValueStateDescriptor<>(
+                            "features",
+                            TypeInformation.of(new TypeHint<List<Feature>>() {}));
+            featureDescriptor.setQueryable(KMeansClustering.FEATURES_QUERY_KEY);
+            
+            _featureResults = getRuntimeContext().getState(featureDescriptor);
         }
 
         @Override
