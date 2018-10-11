@@ -13,6 +13,52 @@
 </head>
 <body>
 
+<style>
+    #menu {
+        background: #fff;
+        position: absolute;
+        z-index: 1;
+        top: 10px;
+        right: 10px;
+        border-radius: 3px;
+        width: 120px;
+        border: 1px solid rgba(0,0,0,0.4);
+        font-family: 'Open Sans', sans-serif;
+    }
+
+    #menu a {
+        font-size: 13px;
+        color: #404040;
+        display: block;
+        margin: 0;
+        padding: 0;
+        padding: 10px;
+        text-decoration: none;
+        border-bottom: 1px solid rgba(0,0,0,0.25);
+        text-align: center;
+    }
+
+    #menu a:last-child {
+        border: none;
+    }
+
+    #menu a:hover {
+        background-color: #f8f8f8;
+        color: #404040;
+    }
+
+    #menu a.active {
+        background-color: #3887be;
+        color: #ffffff;
+    }
+
+    #menu a.active:hover {
+        background: #3074a4;
+    }
+</style>
+
+<nav id="menu"></nav>
+
 <div id='map'></div>
 <script>
 mapboxgl.accessToken = '__MAPBOX_ACCESS_TOKEN__';
@@ -25,10 +71,10 @@ var map = new mapboxgl.Map({
 
 
 
-function getPoints() {
+function getPoints(data) {
     
     xhttp = new XMLHttpRequest()
-	xhttp.open("GET", "http://localhost:8085/clusters/", false);
+	xhttp.open("GET", "http://localhost:8085/"+data, false);
 	xhttp.send();
 	console.log(xhttp.responseText);
 	return JSON.parse(xhttp.responseText)
@@ -36,15 +82,15 @@ function getPoints() {
 }
 
 map.on('load', function () {
-    // Add a source and layer displaying the centroids that will be animated.
-    map.addSource('flinkcentroids', {
+    // Add a source and layer displaying the clusters that will be animated.
+    map.addSource('flinkclusters', {
         "type": "geojson",
-        "data": getPoints()
+        "data": getPoints("clusters")
     });
 
     map.addLayer({
-        "id": "centroids",
-        "source": "flinkcentroids",
+        "id": "clusters",
+        "source": "flinkclusters",
         "type": "circle",
         "paint": {
             "circle-radius": ["get", "size"],
@@ -54,14 +100,65 @@ map.on('load', function () {
         "filter": ["==", "$type", "Point"]
     });
 
+    // Add a source and layer displaying the clusters that will be animated.
+    map.addSource('flinkfeatures', {
+        "type": "geojson",
+        "data": getPoints("features")
+    });
+
+    map.addLayer({
+        "id": "features",
+        "source": "flinkfeatures",
+        "type": "circle",
+        "paint": {
+            "circle-radius": 3,
+            "circle-opacity": 0.6,
+            "circle-color": "#000000"
+        },
+        "filter": ["==", "$type", "Point"]
+    });
+
 	function animateMarker() {
         // Update the data to a new position .
-        map.getSource('flinkcentroids').setData(getPoints());
+        map.getSource('flinkclusters').setData(getPoints("clusters"));
+        map.getSource('flinkfeatures').setData(getPoints("features"));
 
     }
 
-   // Update the centroids every 0.5 seconds.
+   
+   var toggleableLayerIds = [ 'clusters', 'features' ];
+
+   for (var i = 0; i < toggleableLayerIds.length; i++) {
+       var id = toggleableLayerIds[i];
+
+       var link = document.createElement('a');
+       link.href = '#';
+       link.className = 'active';
+       link.textContent = id;
+
+       link.onclick = function (e) {
+           var clickedLayer = this.textContent;
+           e.preventDefault();
+           e.stopPropagation();
+
+           var visibility = map.getLayoutProperty(clickedLayer, 'visibility');
+
+           if (visibility === 'visible') {
+               map.setLayoutProperty(clickedLayer, 'visibility', 'none');
+               this.className = '';
+           } else {
+               this.className = 'active';
+               map.setLayoutProperty(clickedLayer, 'visibility', 'visible');
+           }
+       };
+
+       var layers = document.getElementById('menu');
+       layers.appendChild(link);
+   }
+
+   // Update the clusters every 0.5 seconds.
    var timer = window.setInterval(animateMarker, 500);
+
 });
 
 
