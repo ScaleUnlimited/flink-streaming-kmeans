@@ -53,7 +53,7 @@ public class KMeansClusteringTest {
         
         final int numClusters = 20;
         double maxDistance = KMeansUtils.calcMaxDistance(features, numClusters);
-        KMeansClustering.build(env, featuresSource, sink, numClusters, maxDistance);
+        KMeansClustering.build(env, featuresSource, sink, numClusters, maxDistance, false);
         
         env.execute();
         
@@ -112,16 +112,13 @@ public class KMeansClusteringTest {
         SourceFunction<Feature> featuresSource = new ParallelListSource<Feature>(features);
 
         InMemorySinkFunction sink = new InMemorySinkFunction();
-        KMeansClustering.build(env, featuresSource, sink, clusters, distance);
+        KMeansClustering.build(env, featuresSource, sink, clusters, distance, false);
         
         FileUtils.write(new File("./target/kmeans-graph.dot"), FlinkUtils.planToDot(env.getExecutionPlan()));
         
         env.execute();
         
         Queue<FeatureResult> results = InMemorySinkFunction.getValues();
-        
-        // Map from feature id to feature.
-        Map<Integer, Feature> featureMap = createFeatureMap(features);
         
         int numResults = 0;
         
@@ -216,7 +213,7 @@ public class KMeansClusteringTest {
 
         InMemorySinkFunction sink = new InMemorySinkFunction();
         
-        KMeansClustering.build(env, featuresSource, sink, numClusters, maxDistance);
+        KMeansClustering.build(env, featuresSource, sink, numClusters, maxDistance, true);
         
         final Duration TEST_TIMEOUT = Duration.ofSeconds(10);
         final Deadline deadline = Deadline.now().plus(TEST_TIMEOUT);
@@ -292,15 +289,4 @@ public class KMeansClusteringTest {
             _values.add(new FeatureResult(value));
         }
     }
-
-    private static Map<Integer, Feature> createFeatureMap(List<Feature> features) {
-        Map<Integer, Feature> result = new HashMap<>();
-        
-        for (Feature f : features) {
-            result.put(f.getId(), f);
-        }
-        
-        return result;
-    }
-
 }
