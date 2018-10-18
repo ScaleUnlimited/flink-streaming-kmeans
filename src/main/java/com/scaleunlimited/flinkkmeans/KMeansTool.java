@@ -40,6 +40,10 @@ import org.kohsuke.args4j.Option;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+
 
 public class KMeansTool {
     private static final Logger LOGGER = LoggerFactory.getLogger(KMeansTool.class);
@@ -161,6 +165,7 @@ public class KMeansTool {
         private ValueStateDescriptor<Cluster> _stateDescriptor;
         private JobID _jobID;
         private int _numClusters;
+        private Gson _gson;
         
         public ClustersRequestHandler(QueryableStateClient client,
                 ValueStateDescriptor<Cluster> stateDescriptor, JobID jobID,
@@ -171,6 +176,7 @@ public class KMeansTool {
             _stateDescriptor = stateDescriptor;
             _jobID = jobID;
             _numClusters = numClusters;
+            _gson = new Gson();
         }
         
         @Override
@@ -181,9 +187,6 @@ public class KMeansTool {
             response.setHeader("Access-Control-Allow-Origin", "*");
             
             PrintWriter writer = response.getWriter();
-            StringBuilder out = new StringBuilder();
-            out.append("{\n\t\"type\": \"FeatureCollection\",\n");
-            out.append("\t\"features\": [");
 
             List<CompletableFuture<ValueState<Cluster>>> futures = new ArrayList<>();
             for (int i = 0; i < _numClusters; i++) {
@@ -198,7 +201,7 @@ public class KMeansTool {
             // the collection of features below.
             CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[_numClusters])).join();
             
-            boolean firstCluster = true;
+            JsonArray jsonFeatures = new JsonArray();
             for (CompletableFuture<ValueState<Cluster>> future : futures) {
 
                 try {
@@ -207,13 +210,8 @@ public class KMeansTool {
                         continue;
                     }
                     
-                    if (!firstCluster) {
-                        out.append(",\n\t\t");
-                    } else {
-                        firstCluster = false;
-                    }
 
-                    printCluster(out, cluster);
+                    addCluster(jsonFeatures, cluster);
                 } catch (ExecutionException e) {
                     if (e.getCause() instanceof UnknownKeyOrNamespaceException) {
                         // Ignore this error, as it happens when the flow hasn't generated results yet, so
@@ -235,28 +233,37 @@ public class KMeansTool {
                 }
             }
             
-            out.append("\n\t]\n");
-            out.append("}\n");
-            writer.print(out.toString());
+            JsonObject featureCollection = new JsonObject();
+            featureCollection.addProperty("type", "FeatureCollection");
+            featureCollection.add("features", jsonFeatures);
+            writer.print(_gson.toJson(featureCollection));
             baseRequest.setHandled(true);
         }
 
-        private void printCluster(StringBuilder out, Cluster cluster) {
+        private void addCluster(JsonArray jsonArr, Cluster cluster) {
             Feature centroid = cluster.getCentroid();
             double longitude = centroid.getX();
             double latitude = centroid.getY();
-            
-            out.append("{\n");
-            out.append("\t\t\t\"type\": \"Feature\",\n");
-            out.append("\t\t\t\"geometry\": {\n");
-            out.append("\t\t\t\t\"type\": \"Point\",\n");
-            out.append(String.format("\t\t\t\t\"coordinates\": [%f, %f]\n", longitude, latitude));
-            out.append("\t\t\t},\n");
-            out.append("\t\t\t\"properties\": {\n");
-            out.append(String.format("\t\t\t\t\"size\": %d\n", cluster.getNumFeatures()));
-            out.append("\t\t\t}\n");
-            out.append("\t\t}");
+
+            JsonArray coordinates = new JsonArray();
+            coordinates.add(longitude);
+            coordinates.add(latitude);
+
+            JsonObject geometry = new JsonObject();
+            geometry.addProperty("type", "Point");
+            geometry.add("coordinates", coordinates);
+
+            JsonObject properties = new JsonObject();
+            properties.addProperty("size", cluster.getNumFeatures());
+
+            JsonObject jsonFeature = new JsonObject();
+            jsonFeature.addProperty("type", "Feature");
+            jsonFeature.add("geometry", geometry);
+            jsonFeature.add("properties", properties);
+
+            jsonArr.add(jsonFeature);
         }
+
     }
 
     private static class FeaturesRequestHandler extends AbstractHandler {
@@ -265,6 +272,7 @@ public class KMeansTool {
         private ValueStateDescriptor<List<Feature>> _stateDescriptor;
         private JobID _jobID;
         private int _numClusters;
+        private Gson _gson;
 
         public FeaturesRequestHandler(QueryableStateClient client,
                 ValueStateDescriptor<List<Feature>> stateDescriptor, JobID jobID,
@@ -275,6 +283,7 @@ public class KMeansTool {
             _stateDescriptor = stateDescriptor;
             _jobID = jobID;
             _numClusters = numClusters;
+            _gson = new Gson();
         }
         
         @Override
@@ -285,9 +294,6 @@ public class KMeansTool {
             response.setHeader("Access-Control-Allow-Origin", "*");
             
             PrintWriter writer = response.getWriter();
-            StringBuilder out = new StringBuilder();
-            out.append("{\n\t\"type\": \"FeatureCollection\",\n");
-            out.append("\t\"features\": [");
 
             List<CompletableFuture<ValueState<List<Feature>>>> futures = new ArrayList<>();
             for (int i = 0; i < _numClusters; i++) {
@@ -299,7 +305,7 @@ public class KMeansTool {
             // Wait  for all futures to complete.
             CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[_numClusters])).join();
             
-            boolean firstFeature = true;
+            JsonArray jsonFeatures = new JsonArray();
             for (CompletableFuture<ValueState<List<Feature>>> future : futures) {
                 try {
                     List<Feature> clusterFeatures = future.get().value();
@@ -308,13 +314,7 @@ public class KMeansTool {
                     }
                     
                     for (Feature feature : clusterFeatures) {
-                        if (!firstFeature) {
-                            out.append(",\n\t\t");
-                        } else {
-                            firstFeature = false;
-                        }
-
-                        printFeature(out, feature);
+                        addFeature(jsonFeatures, feature);
                     }
                 } catch (ExecutionException e) {
                     if (e.getCause() instanceof UnknownKeyOrNamespaceException) {
@@ -337,24 +337,32 @@ public class KMeansTool {
                 }
             }
 
-            out.append("\n\t]\n");
-            out.append("}\n");
-            writer.print(out.toString());
+            JsonObject featureCollection = new JsonObject();
+            featureCollection.addProperty("type", "FeatureCollection");
+            featureCollection.add("features", jsonFeatures);
+            writer.print(_gson.toJson(featureCollection));
             baseRequest.setHandled(true);
         }
         
-        private void printFeature(StringBuilder out, Feature feature) {
+        private void addFeature(JsonArray jsonArr, Feature feature) {
             double longitude = feature.getX();
             double latitude = feature.getY();
-            
-            out.append("{\n");
-            out.append("\t\t\t\"type\": \"Feature\",\n");
-            out.append("\t\t\t\"geometry\": {\n");
-            out.append("\t\t\t\t\"type\": \"Point\",\n");
-            out.append(String.format("\t\t\t\t\"coordinates\": [%f, %f]\n", longitude, latitude));
-            out.append("\t\t\t}\n");
-            out.append("\t\t}");
+ 
+            JsonArray coordinates = new JsonArray();
+            coordinates.add(longitude);
+            coordinates.add(latitude);
+
+            JsonObject geometry = new JsonObject();
+            geometry.addProperty("type", "Point");
+            geometry.add("coordinates", coordinates);
+
+            JsonObject jsonFeature = new JsonObject();
+            jsonFeature.addProperty("type", "Feature");
+            jsonFeature.add("geometry", geometry);
+
+            jsonArr.add(jsonFeature);
         }
+
     }
 
     private static class MapRequestHandler extends AbstractHandler {
