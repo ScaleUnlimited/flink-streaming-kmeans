@@ -72,13 +72,7 @@ var map = new mapboxgl.Map({
 
 
 function getPoints(data) {
-    
-    xhttp = new XMLHttpRequest()
-	xhttp.open("GET", "http://localhost:8085/"+data, false);
-	xhttp.send();
-	console.log(xhttp.responseText);
-	return JSON.parse(xhttp.responseText)
-    
+    return "http://localhost:8085/"+data
 }
 
 map.on('load', function () {
