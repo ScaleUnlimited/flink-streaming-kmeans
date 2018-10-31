@@ -120,8 +120,11 @@ public class KMeansTool {
                 ContextHandler contextMap = new ContextHandler("/map");
                 contextMap.setHandler(new MapRequestHandler(options.getAccessToken()));
 
+                ContextHandler contextTimestamp = new ContextHandler("/timestamp");
+                contextTimestamp.setHandler(new TimestampRequestHandler());
+
                 ContextHandlerCollection contexts = new ContextHandlerCollection();
-                contexts.setHandlers(new Handler[] { contextClusters, contextFeatures, contextMap });
+                contexts.setHandlers(new Handler[] { contextClusters, contextFeatures, contextMap, contextTimestamp });
 
                 server.setHandler(contexts);
                 server.start();
@@ -386,6 +389,23 @@ public class KMeansTool {
             }
             PrintWriter writer = response.getWriter();
             writer.print(_mapFile);
+            baseRequest.setHandled(true);
+        }
+    }
+
+    private static class TimestampRequestHandler extends AbstractHandler {
+
+        public TimestampRequestHandler() {
+        }
+
+        @Override
+        public void handle(String target, Request baseRequest,
+                HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
+            response.setContentType("text/html; charset=utf-8");
+            response.setStatus(HttpServletResponse.SC_NOT_IMPLEMENTED);
+
+            PrintWriter writer = response.getWriter();
+            writer.print("This handler hasn't been implemented as yet");
             baseRequest.setHandled(true);
         }
     }
