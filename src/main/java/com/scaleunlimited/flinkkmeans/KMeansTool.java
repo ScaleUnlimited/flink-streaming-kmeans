@@ -6,6 +6,8 @@ import java.io.InputStream;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -395,7 +397,12 @@ public class KMeansTool {
 
     private static class TimestampRequestHandler extends AbstractHandler {
 
+        private final DateTimeFormatter _df = DateTimeFormatter.ofPattern("EEE, MMM d, yyyy");
+        private final DateTimeFormatter _tf = DateTimeFormatter.ofPattern("h:mm a");
+        private Gson _gson;
+
         public TimestampRequestHandler() {
+            _gson = new Gson();
         }
 
         @Override
@@ -405,7 +412,11 @@ public class KMeansTool {
             response.setStatus(HttpServletResponse.SC_NOT_IMPLEMENTED);
 
             PrintWriter writer = response.getWriter();
-            writer.print("This handler hasn't been implemented as yet");
+            JsonObject timestamp = new JsonObject();
+            LocalDateTime now = LocalDateTime.now();
+            timestamp.addProperty("date", _df.format(now));
+            timestamp.addProperty("time", _tf.format(now));
+            writer.print(_gson.toJson(timestamp));
             baseRequest.setHandled(true);
         }
     }
