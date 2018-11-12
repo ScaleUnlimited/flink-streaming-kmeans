@@ -408,11 +408,12 @@ public class KMeansTool {
         @Override
         public void handle(String target, Request baseRequest,
                 HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
-            response.setContentType("text/html; charset=utf-8");
-            response.setStatus(HttpServletResponse.SC_NOT_IMPLEMENTED);
+            response.setContentType("application/json; charset=utf-8");
+            response.setStatus(HttpServletResponse.SC_OK);
 
             PrintWriter writer = response.getWriter();
             JsonObject timestamp = new JsonObject();
+            // TODO KKr - We need to return the latest time for the features here.
             LocalDateTime now = LocalDateTime.now();
             timestamp.addProperty("date", _df.format(now));
             timestamp.addProperty("time", _tf.format(now));
