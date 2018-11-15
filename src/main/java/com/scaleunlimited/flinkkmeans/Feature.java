@@ -10,6 +10,7 @@ public class Feature implements Serializable {
     public static final int NO_FEATURE_ID = -1;
     
     private int id;
+    private long timestamp;
     private double x;
     private double y;
     private int clusterId;
@@ -33,16 +34,19 @@ public class Feature implements Serializable {
         this.y = y;
         this.clusterId = clusterId;
         this.processCount = 0;
+        this.timestamp = System.currentTimeMillis();
     }
 
     public Feature(Feature p) {
         this(p.getId(), p.getX(), p.getY(), p.getClusterId());
         this.processCount = p.processCount;
+        this.timestamp = p.timestamp;
     }
 
     public Feature(Feature p, int scalar) {
         this(p.getId(), p.getX() / scalar, p.getY() / scalar, p.getClusterId());
         this.processCount = p.processCount;
+        this.timestamp = p.timestamp;
     }
 
     public int getId() {
@@ -51,6 +55,14 @@ public class Feature implements Serializable {
     
     public void setId(int id) {
         this.id = id;
+    }
+    
+    public long getTimestamp() {
+        return timestamp;
+    }
+    
+    public void setTimestamp(long timestamp) {
+        this.timestamp = timestamp;
     }
     
     public double getX() {
