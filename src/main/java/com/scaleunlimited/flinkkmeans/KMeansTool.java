@@ -7,11 +7,15 @@ import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicLong;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
@@ -115,15 +119,17 @@ public class KMeansTool {
                 contextClusters.setHandler(new ClustersRequestHandler(_localCluster.getQueryableStateClient(),
                         clustersStateDescriptor, submission.getJobID(), options.getNumClusters()));
 
+                AtomicLong latestTimestamp = new AtomicLong(0);
                 ContextHandler contextFeatures = new ContextHandler("/features");
                 contextFeatures.setHandler(new FeaturesRequestHandler(_localCluster.getQueryableStateClient(),
-                        featuresStateDescriptor, submission.getJobID(), options.getNumClusters()));
+                        featuresStateDescriptor, submission.getJobID(), options.getNumClusters(),
+                        latestTimestamp));
 
                 ContextHandler contextMap = new ContextHandler("/map");
                 contextMap.setHandler(new MapRequestHandler(options.getAccessToken()));
 
                 ContextHandler contextTimestamp = new ContextHandler("/timestamp");
-                contextTimestamp.setHandler(new TimestampRequestHandler());
+                contextTimestamp.setHandler(new TimestampRequestHandler(latestTimestamp));
 
                 ContextHandlerCollection contexts = new ContextHandlerCollection();
                 contexts.setHandlers(new Handler[] { contextClusters, contextFeatures, contextMap, contextTimestamp });
@@ -278,16 +284,18 @@ public class KMeansTool {
         private JobID _jobID;
         private int _numClusters;
         private Gson _gson;
-
+        private AtomicLong _latestTimestamp;
+        
         public FeaturesRequestHandler(QueryableStateClient client,
                 ValueStateDescriptor<List<Feature>> stateDescriptor, JobID jobID,
-                int numClusters) {
+                int numClusters, AtomicLong latestTimestamp) {
             super();
             
             _client = client;
             _stateDescriptor = stateDescriptor;
             _jobID = jobID;
             _numClusters = numClusters;
+            _latestTimestamp = latestTimestamp;
             _gson = new Gson();
         }
         
@@ -318,9 +326,13 @@ public class KMeansTool {
                         continue;
                     }
                     
+                    long latestTimestamp = _latestTimestamp.get();
                     for (Feature feature : clusterFeatures) {
+                        latestTimestamp = Math.max(latestTimestamp, feature.getTimestamp());
                         addFeature(jsonFeatures, feature);
                     }
+                    
+                    _latestTimestamp.set(latestTimestamp);
                 } catch (ExecutionException e) {
                     if (e.getCause() instanceof UnknownKeyOrNamespaceException) {
                         // Ignore this error, as it happens when the flow hasn't generated results yet, so
@@ -399,10 +411,17 @@ public class KMeansTool {
 
         private final DateTimeFormatter _df = DateTimeFormatter.ofPattern("EEE, MMM d, yyyy");
         private final DateTimeFormatter _tf = DateTimeFormatter.ofPattern("h:mm a");
+        private AtomicLong _latestTimestamp;
         private Gson _gson;
-
-        public TimestampRequestHandler() {
+        private ZoneOffset _zoneOffset;
+        
+        public TimestampRequestHandler(AtomicLong latestTimestamp) {
+            _latestTimestamp = latestTimestamp;
             _gson = new Gson();
+            
+            LocalDateTime dt = LocalDateTime.now();
+            ZonedDateTime zdt = dt.atZone(ZoneId.of("America/New_York"));
+            _zoneOffset = zdt.getOffset();
         }
 
         @Override
@@ -411,12 +430,12 @@ public class KMeansTool {
             response.setContentType("application/json; charset=utf-8");
             response.setStatus(HttpServletResponse.SC_OK);
 
+
             PrintWriter writer = response.getWriter();
             JsonObject timestamp = new JsonObject();
-            // TODO KKr - We need to return the latest time for the features here.
-            LocalDateTime now = LocalDateTime.now();
-            timestamp.addProperty("date", _df.format(now));
-            timestamp.addProperty("time", _tf.format(now));
+            LocalDateTime featureTime = LocalDateTime.ofEpochSecond(_latestTimestamp.get() / 1000L, 0, _zoneOffset);
+            timestamp.addProperty("date", _df.format(featureTime));
+            timestamp.addProperty("time", _tf.format(featureTime));
             writer.print(_gson.toJson(timestamp));
             baseRequest.setHandled(true);
         }

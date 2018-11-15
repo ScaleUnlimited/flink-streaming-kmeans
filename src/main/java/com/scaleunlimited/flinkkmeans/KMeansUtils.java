@@ -29,13 +29,13 @@ public class KMeansUtils {
         int rideID = 0;
         for (String ride : rides) {
             String[] fields = ride.split("\t", 3);
-            // TODO save time for generating watermark
             Date startTime = parser.parse(fields[0]);
             double lat = Double.parseDouble(fields[1]);
             double lon = Double.parseDouble(fields[2]);
 
             // x is longitude, y is latitude
             Feature f = new Feature(rideID++, lon, lat);
+            f.setTimestamp(startTime.getTime());
             features.add(f);
             
             if (rideID >= maxFeatures) {
@@ -63,6 +63,5 @@ public class KMeansUtils {
         double yDelta = maxY - minY;
         return Math.sqrt((xDelta * xDelta) + (yDelta * yDelta)) / numClusters;
     }
-
 
 }
